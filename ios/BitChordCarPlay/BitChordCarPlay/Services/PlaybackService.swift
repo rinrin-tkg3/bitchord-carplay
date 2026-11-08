@@ -198,9 +198,13 @@ public class PlaybackService: NSObject, ObservableObject {
         // Remote Seek occurred from Android host
         if let seekSeq = newState.seekSeq, seekSeq != self.lastAppliedSeekSeq {
             self.lastAppliedSeekSeq = seekSeq
-            let targetMs = newState.wantedSeekMs ?? newState.positionMs
-            if isRoutedToIphone {
-                seekTo(positionMs: targetMs, notifyHost: false)
+            // Ignore echo if user just locally seeked
+            let recentlySeekedLocally = Date().timeIntervalSince(self.lastUserActionTime) < 1.5
+            if !recentlySeekedLocally && !self.isSeekingLocally {
+                let targetMs = newState.wantedSeekMs ?? newState.positionMs
+                if isRoutedToIphone {
+                    seekTo(positionMs: targetMs, notifyHost: false)
+                }
             }
         }
 
@@ -485,6 +489,7 @@ public class PlaybackService: NSObject, ObservableObject {
             self?.isSeekingLocally = false
         }
         if notifyHost {
+            self.lastUserActionTime = Date()
             sendAction("seek", params: ["positionMs": positionMs])
         }
     }
@@ -513,8 +518,14 @@ public class PlaybackService: NSObject, ObservableObject {
         req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
         URLSession.shared.dataTask(with: req).resume()
 
-        // Also hit /api/control as backup for maximum compatibility
-        if let controlUrl = URL(string: "\(baseUrl)/api/control?action=\(type)&cid=ios_carplay") {
+        // Also hit /api/control with full params as backup for maximum compatibility
+        var controlQuery = "action=\(type)&cid=ios_carplay"
+        if let p = params {
+            for (k, v) in p {
+                controlQuery += "&\(k)=\(v)"
+            }
+        }
+        if let controlUrl = URL(string: "\(baseUrl)/api/control?\(controlQuery)") {
             var cReq = URLRequest(url: controlUrl)
             cReq.httpMethod = "POST"
             URLSession.shared.dataTask(with: cReq).resume()

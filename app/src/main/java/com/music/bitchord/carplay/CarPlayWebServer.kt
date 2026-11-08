@@ -610,9 +610,15 @@ object CarPlayWebServer {
                 path == "/api/control" -> {
                     val action = queryParams["action"].orEmpty().ifBlank { queryParams["type"].orEmpty() }
                     val param = queryParams["param"].orEmpty()
+                    val posParam = queryParams["positionMs"].orEmpty().ifBlank { queryParams["pos"].orEmpty() }
                     val payload = JSONObject().apply {
                         put("type", action)
                         put("param", param)
+                        if (posParam.isNotBlank()) {
+                            put("positionMs", posParam.toLongOrNull() ?: -1L)
+                        } else if (param.isNotBlank() && action == "seek") {
+                            put("positionMs", param.toLongOrNull() ?: -1L)
+                        }
                         if (action == "play-index" || action == "playQueueIndex") {
                             put("index", param.toIntOrNull() ?: -1)
                         }
@@ -1045,10 +1051,16 @@ object CarPlayWebServer {
                         controller?.onPrevious()
                     }
                     "seek" -> {
-                        val pos = json.optLong("positionMs", 0L).coerceAtLeast(0L)
-                        mainHandler.post {
-                            CarPlayWebBridge.speaker?.takeIf { it.active }?.seekTo(pos)
-                            controller?.onSeekTo(pos)
+                        val pos = when {
+                            json.has("positionMs") -> json.optLong("positionMs", -1L)
+                            json.has("param") -> json.optString("param", "").toLongOrNull() ?: -1L
+                            else -> -1L
+                        }
+                        if (pos >= 0L) {
+                            mainHandler.post {
+                                CarPlayWebBridge.speaker?.takeIf { it.active }?.seekTo(pos)
+                                controller?.onSeekTo(pos)
+                            }
                         }
                     }
                     "playQueueIndex", "play-index" -> {
