@@ -5,6 +5,9 @@ on:
     branches: [ "**" ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-ipa:
     runs-on: macos-latest
@@ -40,3 +43,15 @@ jobs:
           name: BitChordCarPlay-ipa
           path: ios/BitChordCarPlay/BitChordCarPlay.ipa
           retention-days: 14
+
+      - name: Release Latest IPA
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "BitChord CarPlay Latest Release"
+          body: "Automated latest build of BitChord CarPlay iOS app (.ipa) for TrollStore / Sideloadly."
+          prerelease: false
+          files: ios/BitChordCarPlay/BitChordCarPlay.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
