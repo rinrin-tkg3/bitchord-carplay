@@ -19,6 +19,7 @@ jobs:
       - name: Build BitChordCarPlay iOS App
         run: |
           cd ios/BitChordCarPlay
+          set -o pipefail
           xcodebuild clean build \
             -project BitChordCarPlay.xcodeproj \
             -scheme BitChordCarPlay \
@@ -27,7 +28,11 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            BUILD_DIR=build
+            BUILD_DIR=build 2>&1 | tee build.log || {
+              echo "BUILD_FAILED"
+              grep -E "(error:|fatal error:)" build.log | tail -n 25
+              exit 1
+            }
 
       - name: Package .ipa
         run: |

@@ -348,44 +348,7 @@ public class PlaybackService: NSObject, ObservableObject {
         nextTrack()
     }
 
-    // MARK: - Auto-Discovery of Galaxy BitChord Host (mDNS, Bonjour & Multi-Subnet Probing)
-    private var bonjourBrowser: NWBrowser?
-
-    private func startBonjourBrowser(onFound: @escaping (String, Int) -> Void) {
-        let descriptor = NWBrowser.Descriptor.bonjour(type: "_http._tcp", domain: nil)
-        let browser = NWBrowser(for: descriptor, using: .tcp)
-        self.bonjourBrowser = browser
-
-        browser.browseResultsChangedHandler = { results, _ in
-            for result in results {
-                if case let .service(name, _, _, _) = result.endpoint {
-                    if name.lowercased().contains("bitchord") {
-                        let conn = NWConnection(to: result.endpoint, using: .tcp)
-                        conn.stateUpdateHandler = { state in
-                            if case .ready = state, let remote = conn.currentPath?.remoteEndpoint {
-                                if case let .hostPort(host, port) = remote {
-                                    let hostStr: String
-                                    switch host {
-                                    case .ipv4(let ip): hostStr = "\(ip)"
-                                    case .name(let n, _): hostStr = n
-                                    default: hostStr = ""
-                                    }
-                                    if !hostStr.isEmpty {
-                                        DispatchQueue.main.async {
-                                            onFound(hostStr, Int(port.rawValue))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        conn.start(queue: .global())
-                    }
-                }
-            }
-        }
-        browser.start(queue: .global())
-    }
-
+    // MARK: - Auto-Discovery of Galaxy BitChord Host (mDNS & Multi-Subnet Probing)
     public func triggerAutoDiscovery() {
         guard !isDiscovering else { return }
         isDiscovering = true
@@ -403,7 +366,7 @@ public class PlaybackService: NSObject, ObservableObject {
                 candidates.append("\(prefix).100")
             }
         }
-        // mDNS & User's known IPs
+        // mDNS (bitchord.local) & User's known IPs
         candidates.append("bitchord.local")
         candidates.append("10.117.79.194")
         candidates.append("10.117.79.1")
@@ -429,19 +392,6 @@ public class PlaybackService: NSObject, ObservableObject {
         var foundIp: String? = nil
         var foundPort: Int? = nil
 
-        // 1. Bonjour (mDNS) discovery in background
-        startBonjourBrowser { [weak self] ip, p in
-            guard let self = self, self.isDiscovering else { return }
-            self.serverHost = ip
-            self.serverPort = p
-            self.isConnected = true
-            self.isDiscovering = false
-            self.discoveryStatusText = "Galaxy発見 (\(ip):\(p))"
-            self.fetchState()
-            print("[PlaybackService] Bonjour Discovery succeeded: \(ip):\(p)")
-        }
-
-        // 2. Parallel HTTP probing across candidate IPs & Ports
         for ip in uniqueCandidates {
             for port in candidatePorts {
                 guard let url = URL(string: "http://\(ip):\(port)/api/state?cid=autodiscover") else { continue }
@@ -464,7 +414,6 @@ public class PlaybackService: NSObject, ObservableObject {
 
         group.notify(queue: .main) { [weak self] in
             guard let self = self else { return }
-            if !self.isDiscovering { return } // Already resolved via Bonjour
             self.isDiscovering = false
             if let ip = foundIp, let port = foundPort {
                 self.serverHost = ip
