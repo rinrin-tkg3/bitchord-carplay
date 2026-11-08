@@ -1051,15 +1051,31 @@ internal class CarPlayWebSpeaker(
     private var requestedPositionMs: Long = 0L
     private var requestedAt: Long = 0L
     private var autoEndedForMediaId: String? = null
+    private var lastSinkNotifyAt: Long = 0L
+
+    // Guard against loading getting permanently stuck if client report drops or delays
+    private val isLoadingEffective: Boolean
+        get() = loading && (SystemClock.elapsedRealtime() - requestedAt < 2500L)
 
     override val playWhenReady: Boolean get() = wantsPlay
 
     override val isPlaying: Boolean
-        get() = active && wantsPlay && !loading && !finished && (status?.isPlaying == true || (SystemClock.elapsedRealtime() - requestedAt < 1500L))
+        get() {
+            if (!active || !wantsPlay || finished) return false
+            if (isLoadingEffective) return false
+            val s = status
+            val now = SystemClock.elapsedRealtime()
+            // If client reported within 4 seconds, respect its playing status
+            if (s != null && now - s.at < 4000L) {
+                return s.isPlaying
+            }
+            // Fallback during Wi-Fi report jitter/gap: keep clock alive if host wants play
+            return true
+        }
 
     override val playbackState: Int
         get() = when {
-            loading -> Player.STATE_BUFFERING
+            isLoadingEffective -> Player.STATE_BUFFERING
             finished -> Player.STATE_ENDED
             status?.buffering == true -> Player.STATE_BUFFERING
             else -> Player.STATE_READY
@@ -1069,10 +1085,23 @@ internal class CarPlayWebSpeaker(
         get() {
             val s = status
             val now = SystemClock.elapsedRealtime()
-            if (s == null || loading || now - requestedAt < SEEK_GRACE_MS) {
+            if (!active) return requestedPositionMs.coerceAtLeast(0L)
+            if (isLoadingEffective || (now - requestedAt < SEEK_GRACE_MS && requestedPositionMs > 0L)) {
                 return requestedPositionMs.coerceAtLeast(0L)
             }
-            if (!s.isPlaying) return s.positionMs.coerceAtLeast(0L)
+            if (s == null) {
+                if (wantsPlay && !finished) {
+                    val elapsed = (now - requestedAt).coerceAtLeast(0L)
+                    val extrapolated = requestedPositionMs + elapsed
+                    val dur = durationMs
+                    return if (dur != C.TIME_UNSET && dur > 0L) extrapolated.coerceAtMost(dur) else extrapolated
+                }
+                return requestedPositionMs.coerceAtLeast(0L)
+            }
+            if (!wantsPlay) return s.positionMs.coerceAtLeast(0L)
+            // Extrapolate smoothly if client is playing or if client report is temporarily stalled
+            val isMoving = s.isPlaying || (now - s.at > 1200L && wantsPlay && !finished)
+            if (!isMoving) return s.positionMs.coerceAtLeast(0L)
             val elapsed = (now - s.at).coerceAtLeast(0L)
             val extrapolated = s.positionMs + elapsed
             val dur = durationMs
@@ -1280,13 +1309,20 @@ internal class CarPlayWebSpeaker(
     ) {
         if (!active) return
         val now = SystemClock.elapsedRealtime()
-        if (mediaId.isNotBlank() && mediaId == wantedMediaId) {
+        val cleanMediaId = mediaId.substringBefore("?").trim()
+        val targetId = wantedMediaId?.substringBefore("?")?.trim()
+        val isTargetMatch = cleanMediaId.isNotBlank() && (targetId == null || cleanMediaId == targetId || cleanMediaId.contains(targetId) || targetId.contains(cleanMediaId))
+
+        if (isTargetMatch) {
             val prev = status
             val wasLoading = loading
             loading = false
+            if (wantedMediaId.isNullOrBlank()) {
+                wantedMediaId = cleanMediaId
+            }
             val graceActive = now - requestedAt < SEEK_GRACE_MS
             val authDurMs = CarPlayWebBridge.resolveAuthoritativeDurationMs(
-                mediaId = mediaId,
+                mediaId = cleanMediaId,
                 clientDurationMs = durationMs,
             )
             val rawEffectivePos = if (graceActive && abs(positionMs - requestedPositionMs) > 2500L) {
@@ -1300,13 +1336,13 @@ internal class CarPlayWebSpeaker(
             } else {
                 rawEffectivePos
             }
-            if (rawEffectivePos < 2_000L && autoEndedForMediaId == mediaId) {
+            if (rawEffectivePos < 2_000L && autoEndedForMediaId == cleanMediaId) {
                 autoEndedForMediaId = null
             }
 
             // Smooth out Wi-Fi HTTP report jitter during steady playback so Android's LyricClock
             // receives a monotonic 1.0x playhead without 400ms network-jitter jumps.
-            val currentExtrap = if (prev != null && prev.mediaId == mediaId && prev.isPlaying) {
+            val currentExtrap = if (prev != null && prev.mediaId == cleanMediaId && prev.isPlaying) {
                 val elapsed = (now - prev.at).coerceAtLeast(0L)
                 prev.positionMs + elapsed
             } else {
@@ -1315,7 +1351,7 @@ internal class CarPlayWebSpeaker(
             val drift = effectivePos - currentExtrap
             val anchoredPos = if (
                 prev != null &&
-                prev.mediaId == mediaId &&
+                prev.mediaId == cleanMediaId &&
                 prev.isPlaying &&
                 playing &&
                 !buffering &&
@@ -1331,7 +1367,7 @@ internal class CarPlayWebSpeaker(
             val effectivePlaying = if (!wantsPlay) false else playing
 
             status = ClientStatus(
-                mediaId = mediaId,
+                mediaId = cleanMediaId,
                 isPlaying = effectivePlaying,
                 buffering = buffering,
                 positionMs = if (authDurMs > 0L) anchoredPos.coerceAtMost(authDurMs) else anchoredPos,
@@ -1344,22 +1380,26 @@ internal class CarPlayWebSpeaker(
                 authDurMs > 5_000L &&
                 rawEffectivePos >= authDurMs - 550L
             if (ended || reachedAuthoritativeEnd) {
-                if (autoEndedForMediaId != mediaId) {
-                    autoEndedForMediaId = mediaId
+                if (autoEndedForMediaId != cleanMediaId) {
+                    autoEndedForMediaId = cleanMediaId
                     onClientTrackEnded()
                 }
             }
 
+            val periodicSyncNeeded = now - lastSinkNotifyAt > 450L
             val stateChanged = prev == null ||
                 wasLoading ||
-                prev.mediaId != mediaId ||
+                prev.mediaId != cleanMediaId ||
                 prev.isPlaying != effectivePlaying ||
                 prev.buffering != buffering ||
                 prev.durationMs != authDurMs ||
                 ended ||
                 reachedAuthoritativeEnd ||
-                abs(drift) > 650L
+                abs(drift) > 650L ||
+                periodicSyncNeeded
+
             if (stateChanged) {
+                lastSinkNotifyAt = now
                 sink?.onRemotePlaybackChanged()
                 onChanged()
                 CarPlayWebBridge.updatePlaybackSnapshot()

@@ -31,6 +31,8 @@ import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -144,6 +146,7 @@ object CarPlayWebServer {
             }
             serverSocket = boundSocket
             Log.i(TAG, "CarPlayWebServer listening strictly on 0.0.0.0:$chosenPort")
+            startUdpBeacon(chosenPort)
             mainHandler.post { onState(chosenPort, true) }
 
             try {
@@ -167,7 +170,54 @@ object CarPlayWebServer {
         }
     }
 
+    private var udpSocket: DatagramSocket? = null
+    private var udpJob: Job? = null
+
+    private fun startUdpBeacon(port: Int) {
+        stopUdpBeacon()
+        udpJob = scope.launch(Dispatchers.IO) {
+            try {
+                val socket = DatagramSocket(port).apply {
+                    broadcast = true
+                    reuseAddress = true
+                }
+                udpSocket = socket
+                val buf = ByteArray(512)
+                while (!socket.isClosed) {
+                    val packet = DatagramPacket(buf, buf.size)
+                    try {
+                        socket.receive(packet)
+                    } catch (_: Exception) {
+                        break
+                    }
+                    val msg = String(packet.data, 0, packet.length, StandardCharsets.UTF_8).trim()
+                    if (msg.contains("DISCOVER_BITCHORD") || msg.contains("bitchord")) {
+                        val reply = "BITCHORD_PORT:$port".toByteArray(StandardCharsets.UTF_8)
+                        val replyPacket = DatagramPacket(reply, reply.size, packet.address, packet.port)
+                        try {
+                            socket.send(replyPacket)
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "UDP Beacon stopped: ${e.message}")
+            }
+        }
+    }
+
+    private fun stopUdpBeacon() {
+        udpJob?.cancel()
+        udpJob = null
+        try {
+            udpSocket?.close()
+        } catch (_: Exception) {
+        }
+        udpSocket = null
+    }
+
     fun stop() {
+        stopUdpBeacon()
         acceptJob?.cancel()
         acceptJob = null
         try {
