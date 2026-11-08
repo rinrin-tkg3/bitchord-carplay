@@ -109,11 +109,13 @@ public struct NowPlayingView: View {
 
                         HStack {
                             Text(formatTime(isDraggingSlider ? sliderValue : playback.currentPositionSec))
-                                .font(.system(size: 12, weight: .monospacedDigit))
+                                .font(.system(size: 12))
+                                .monospacedDigit()
                                 .foregroundColor(.gray)
                             Spacer()
                             Text(formatTime(playback.durationSec))
-                                .font(.system(size: 12, weight: .monospacedDigit))
+                                .font(.system(size: 12))
+                                .monospacedDigit()
                                 .foregroundColor(.gray)
                         }
                     }

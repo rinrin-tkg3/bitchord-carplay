@@ -174,11 +174,14 @@ public class PlaybackService: NSObject, ObservableObject {
         }
 
         URLSession.shared.dataTask(with: url) { [weak self] data, _, error in
-            guard let self = self, let data = data, error == nil else {
+            guard let self = self else { return }
+            guard let data = data, error == nil else {
                 // Fallback to mode 1 stream on failure
                 DispatchQueue.main.async {
-                    let fallbackUrl = URL(string: "\(self.baseUrl)/api/audio/\(videoId)?cid=ios_carplay")!
-                    self.setupPlayerWithUrl(fallbackUrl, startPositionSec: startPositionSec)
+                    let fallbackUrlStr = "\(self.baseUrl)/api/audio/\(videoId)?cid=ios_carplay"
+                    if let fallbackUrl = URL(string: fallbackUrlStr) {
+                        self.setupPlayerWithUrl(fallbackUrl, startPositionSec: startPositionSec)
+                    }
                 }
                 return
             }
@@ -190,8 +193,10 @@ public class PlaybackService: NSObject, ObservableObject {
                 }
             } else {
                 DispatchQueue.main.async {
-                    let fallbackUrl = URL(string: "\(self.baseUrl)/api/audio/\(videoId)?cid=ios_carplay")!
-                    self.setupPlayerWithUrl(fallbackUrl, startPositionSec: startPositionSec)
+                    let fallbackUrlStr = "\(self.baseUrl)/api/audio/\(videoId)?cid=ios_carplay"
+                    if let fallbackUrl = URL(string: fallbackUrlStr) {
+                        self.setupPlayerWithUrl(fallbackUrl, startPositionSec: startPositionSec)
+                    }
                 }
             }
         }.resume()
