@@ -8,10 +8,29 @@ public class PlaybackService: NSObject, ObservableObject {
 
     @Published public var state: BitChordState?
     @Published public var isConnected: Bool = false
+    @Published public var isDiscovering: Bool = false
+    @Published public var discoveryStatusText: String = ""
     @Published public var currentPositionSec: Double = 0.0
     @Published public var durationSec: Double = 0.0
     @Published public var isLocalPlaying: Bool = false
     @Published public var queue: [QueueSongItem] = []
+
+    // CarPlay connection state and simulation mode
+    @Published public var isCarPlayConnected: Bool = false {
+        didSet {
+            checkCarPlayPlaybackEnforcement()
+        }
+    }
+    @Published public var simulateCarPlayConnected: Bool {
+        didSet {
+            UserDefaults.standard.set(simulateCarPlayConnected, forKey: "simulate_carplay_connected")
+            checkCarPlayPlaybackEnforcement()
+        }
+    }
+    public var isEffectivelyCarPlayConnected: Bool {
+        return isCarPlayConnected || simulateCarPlayConnected
+    }
+
     @Published public var playbackMode: AudioPlaybackMode {
         didSet {
             UserDefaults.standard.set(playbackMode.rawValue, forKey: "bitchord_playback_mode")
@@ -39,7 +58,7 @@ public class PlaybackService: NSObject, ObservableObject {
     private var currentLoadedMediaId: String?
     private var lastAppliedSeekSeq: Int64 = 0
     private var isSeekingLocally: Bool = false
-    private var cancellables = Set<AnyCancellable>()
+    private var disconnectCount: Int = 0
 
     public var baseUrl: String {
         let host = serverHost.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -53,11 +72,25 @@ public class PlaybackService: NSObject, ObservableObject {
         self.serverHost = UserDefaults.standard.string(forKey: "bitchord_server_host") ?? "10.207.211.165"
         let savedPort = UserDefaults.standard.integer(forKey: "bitchord_server_port")
         self.serverPort = savedPort > 0 ? savedPort : 8765
+        self.simulateCarPlayConnected = UserDefaults.standard.bool(forKey: "simulate_carplay_connected")
         super.init()
 
         setupAudioSession()
         setupRemoteCommands()
         startPolling()
+        // Auto discover on app launch if not connected
+        triggerAutoDiscovery()
+    }
+
+    // MARK: - CarPlay Playback Enforcement
+    private func checkCarPlayPlaybackEnforcement() {
+        if !isEffectivelyCarPlayConnected {
+            if player?.timeControlStatus == .playing || isLocalPlaying {
+                player?.pause()
+                isLocalPlaying = false
+                print("[PlaybackService] CarPlay disconnected -> paused playback")
+            }
+        }
     }
 
     // MARK: - Audio Session
@@ -86,14 +119,19 @@ public class PlaybackService: NSObject, ObservableObject {
     public func fetchState() {
         guard let url = URL(string: "\(baseUrl)/api/state?cid=ios_carplay") else { return }
         var request = URLRequest(url: url)
-        request.timeoutInterval = 2.0
+        request.timeoutInterval = 1.5
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
             DispatchQueue.main.async {
-                if let error = error {
+                if error != nil {
                     self.isConnected = false
+                    self.disconnectCount += 1
+                    // If disconnected for more than 4 ticks (~2 sec), auto probe network
+                    if self.disconnectCount >= 4 && !self.isDiscovering {
+                        self.triggerAutoDiscovery()
+                    }
                     return
                 }
                 guard let data = data,
@@ -102,6 +140,7 @@ public class PlaybackService: NSObject, ObservableObject {
                     return
                 }
                 self.isConnected = true
+                self.disconnectCount = 0
                 do {
                     let decoder = JSONDecoder()
                     let newState = try decoder.decode(BitChordState.self, from: data)
@@ -132,12 +171,14 @@ public class PlaybackService: NSObject, ObservableObject {
             seekTo(positionMs: targetMs, notifyHost: false)
         }
 
-        // Play / Pause synchronization
+        // Play / Pause synchronization: only play if effectively connected to CarPlay
         let wantsPlay = (newState.playWhenReady == true) || (newState.isPlaying == true)
-        if wantsPlay && player?.timeControlStatus != .playing {
-            player?.play()
-            isLocalPlaying = true
-        } else if !wantsPlay && player?.timeControlStatus == .playing {
+        if wantsPlay && isEffectivelyCarPlayConnected {
+            if player?.timeControlStatus != .playing {
+                player?.play()
+                isLocalPlaying = true
+            }
+        } else if player?.timeControlStatus == .playing {
             player?.pause()
             isLocalPlaying = false
         }
@@ -152,20 +193,17 @@ public class PlaybackService: NSObject, ObservableObject {
 
         switch playbackMode {
         case .streamFromAndroid:
-            // Mode 1: Stream M4A via Galaxy's embedded server
             let streamUrlStr = "\(baseUrl)/api/audio/\(videoId)?cid=ios_carplay"
             guard let streamUrl = URL(string: streamUrlStr) else { return }
             setupPlayerWithUrl(streamUrl, startPositionSec: seekSec)
 
         case .directFromPhone:
-            // Mode 2: Request the direct stream URL from Android or direct resolver
             resolveAndPlayDirectStream(videoId: videoId, startPositionSec: seekSec)
         }
     }
 
     private func resolveAndPlayDirectStream(videoId: String, startPositionSec: Double) {
         guard let url = URL(string: "\(baseUrl)/api/direct-stream/\(videoId)") else {
-            // Fallback to mode 1 stream
             let fallbackUrlStr = "\(baseUrl)/api/audio/\(videoId)?cid=ios_carplay"
             if let fallbackUrl = URL(string: fallbackUrlStr) {
                 setupPlayerWithUrl(fallbackUrl, startPositionSec: startPositionSec)
@@ -176,7 +214,6 @@ public class PlaybackService: NSObject, ObservableObject {
         URLSession.shared.dataTask(with: url) { [weak self] data, _, error in
             guard let self = self else { return }
             guard let data = data, error == nil else {
-                // Fallback to mode 1 stream on failure
                 DispatchQueue.main.async {
                     let fallbackUrlStr = "\(self.baseUrl)/api/audio/\(videoId)?cid=ios_carplay"
                     if let fallbackUrl = URL(string: fallbackUrlStr) {
@@ -214,86 +251,163 @@ public class PlaybackService: NSObject, ObservableObject {
         NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(playerItemDidReachEnd), name: .AVPlayerItemDidPlayToEndTime, object: playerItem)
 
-        let newPlayer = AVPlayer(playerItem: playerItem)
-        newPlayer.automaticallyWaitsToMinimizeStalling = false
-        self.player = newPlayer
+        if player == nil {
+            player = AVPlayer(playerItem: playerItem)
+        } else {
+            player?.replaceCurrentItem(with: playerItem)
+        }
 
-        if startPositionSec > 1.0 {
-            let targetTime = CMTime(seconds: startPositionSec, preferredTimescale: 600)
-            newPlayer.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        if startPositionSec > 0 {
+            let time = CMTime(seconds: startPositionSec, preferredTimescale: 600)
+            player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+
+        if isEffectivelyCarPlayConnected {
+            player?.play()
+            isLocalPlaying = true
+        } else {
+            player?.pause()
+            isLocalPlaying = false
         }
 
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
-        timeObserverToken = newPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+        timeObserverToken = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self = self, !self.isSeekingLocally else { return }
-            self.currentPositionSec = time.seconds
-            if let dur = self.state?.durationMs, dur > 0 {
-                self.durationSec = Double(dur) / 1000.0
-            } else if let itemDur = self.player?.currentItem?.duration.seconds, itemDur > 0, !itemDur.isNaN {
-                self.durationSec = itemDur
+            let sec = CMTimeGetSeconds(time)
+            if !sec.isNaN && !sec.isInfinite {
+                self.currentPositionSec = sec
             }
-            self.isLocalPlaying = (self.player?.timeControlStatus == .playing)
-            self.updateNowPlayingInfo()
+            if let dur = self.player?.currentItem?.duration {
+                let dSec = CMTimeGetSeconds(dur)
+                if !dSec.isNaN && !dSec.isInfinite && dSec > 0 {
+                    self.durationSec = dSec
+                }
+            }
         }
-
-        newPlayer.play()
-        isLocalPlaying = true
-        updateNowPlayingInfo()
     }
 
     @objc private func playerItemDidReachEnd() {
         reportPlaybackToHost(ended: true)
-        sendAction(["type": "next"])
+        nextTrack()
     }
 
-    // MARK: - Actions
+    // MARK: - Auto-Discovery of Galaxy BitChord Host
+    public func triggerAutoDiscovery() {
+        guard !isDiscovering else { return }
+        isDiscovering = true
+        discoveryStatusText = "Galaxy探索中..."
+
+        // Generate candidate hosts (Tethering gateways, known subnets, and current serverHost)
+        var candidates: [String] = []
+        if !serverHost.isEmpty {
+            candidates.append(serverHost)
+        }
+        // Common tethering / mobile hotspot gateways
+        candidates.append("192.168.43.1") // Android Hotspot default IP
+        candidates.append("10.207.211.165") // User's known IP
+        candidates.append("172.20.10.1")  // iPhone Hotspot gateway
+        candidates.append("172.20.10.2")
+        candidates.append("192.168.1.1")
+        candidates.append("192.168.11.1")
+        candidates.append("192.168.11.15")
+
+        // Deduplicate
+        let uniqueCandidates = Array(NSOrderedSet(array: candidates)) as! [String]
+        let group = DispatchGroup()
+        var foundIp: String? = nil
+
+        for ip in uniqueCandidates {
+            guard let url = URL(string: "http://\(ip):\(serverPort)/api/state?cid=autodiscover") else { continue }
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 1.2
+            req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+
+            group.enter()
+            URLSession.shared.dataTask(with: req) { data, response, error in
+                defer { group.leave() }
+                if let http = response as? HTTPURLResponse, http.statusCode == 200, data != nil {
+                    if foundIp == nil {
+                        foundIp = ip
+                    }
+                }
+            }.resume()
+        }
+
+        group.notify(queue: .main) { [weak self] in
+            guard let self = self else { return }
+            self.isDiscovering = false
+            if let ip = foundIp {
+                self.serverHost = ip
+                self.isConnected = true
+                self.discoveryStatusText = "Galaxy発見 (\(ip))"
+                self.fetchState()
+                print("[PlaybackService] Auto-discovery succeeded: \(ip)")
+            } else {
+                self.discoveryStatusText = "Galaxy未検出"
+            }
+        }
+    }
+
+    // MARK: - User Playback Controls
     public func togglePlayPause() {
-        if player?.timeControlStatus == .playing {
+        guard isEffectivelyCarPlayConnected else {
+            print("[PlaybackService] Playback blocked: CarPlay is not connected")
+            return
+        }
+        if isLocalPlaying {
             player?.pause()
             isLocalPlaying = false
-            sendAction(["type": "pause", "positionMs": Int64(currentPositionSec * 1000)])
+            sendCommand("pause")
         } else {
             player?.play()
             isLocalPlaying = true
-            sendAction(["type": "play", "positionMs": Int64(currentPositionSec * 1000)])
+            sendCommand("play")
         }
-        updateNowPlayingInfo()
     }
 
     public func nextTrack() {
-        sendAction(["type": "next"])
+        sendCommand("next")
     }
 
     public func previousTrack() {
-        sendAction(["type": "prev"])
+        sendCommand("previous")
     }
 
     public func seekTo(positionMs: Int64, notifyHost: Bool = true) {
-        let sec = Double(max(0, positionMs)) / 1000.0
-        currentPositionSec = sec
+        let sec = Double(positionMs) / 1000.0
+        self.currentPositionSec = sec
+        self.isSeekingLocally = true
         let time = CMTime(seconds: sec, preferredTimescale: 600)
-        player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
-        if notifyHost {
-            sendAction(["type": "seek", "positionMs": positionMs])
+        player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            self?.isSeekingLocally = false
         }
-        updateNowPlayingInfo()
+        if notifyHost {
+            sendSeekCommand(positionMs: positionMs)
+        }
     }
 
     public func playQueueIndex(_ index: Int) {
-        sendAction(["type": "playQueueIndex", "index": index])
+        sendCommand("play-index", param: "\(index)")
     }
 
-    public func sendAction(_ payload: [String: Any]) {
-        guard let url = URL(string: "\(baseUrl)/api/action?cid=ios_carplay") else { return }
+    // MARK: - API Commands to Android BitChord Server
+    private func sendCommand(_ action: String, param: String? = nil) {
+        var urlStr = "\(baseUrl)/api/control?action=\(action)&cid=ios_carplay"
+        if let p = param {
+            urlStr += "&param=\(p)"
+        }
+        guard let url = URL(string: urlStr) else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-        URLSession.shared.dataTask(with: req) { [weak self] _, _, _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                self?.fetchState()
-            }
-        }.resume()
+        URLSession.shared.dataTask(with: req).resume()
+    }
+
+    private func sendSeekCommand(positionMs: Int64) {
+        let urlStr = "\(baseUrl)/api/seek?positionMs=\(positionMs)&cid=ios_carplay"
+        guard let url = URL(string: urlStr) else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        URLSession.shared.dataTask(with: req).resume()
     }
 
     private func reportPlaybackToHost(ended: Bool = false) {
@@ -360,7 +474,6 @@ public class PlaybackService: NSObject, ObservableObject {
         info[MPMediaItemPropertyPlaybackDuration] = durationSec
         info[MPNowPlayingInfoPropertyPlaybackRate] = isLocalPlaying ? 1.0 : 0.0
 
-        // Async Artwork loader for lock screen and CarPlay
         if let thumbUrlStr = state?.thumbnailUrl, let url = URL(string: "\(baseUrl)/api/artwork?url=\(thumbUrlStr.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = info
             URLSession.shared.dataTask(with: url) { data, _, _ in

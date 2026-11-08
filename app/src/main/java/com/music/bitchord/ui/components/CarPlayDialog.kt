@@ -501,16 +501,9 @@ fun CarPlaySheet(
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
                 SwitchRow(
                     title = "iPhone / CarPlay から音声を流す",
-                    subtitle = "iPhone接続時は自動でオンになります。オンにするとGalaxy本体の音を止め、iPhoneのSafari経由でCarPlayへ音声を流します",
+                    subtitle = "iPhone接続時は自動でオンになります。オンにするとGalaxy本体の音を止め、iPhoneのBitChord CarPlayアプリ経由で車載オーディオへ音声を流します",
                     checked = carPlaySession,
                     onCheckedChange = { CarPlayWebBridge.setAudioRoutedToClient(it, isUserExplicit = true) },
-                )
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
-                SwitchRow(
-                    title = "プレーヤー・歌詞パネルの開閉も同期",
-                    subtitle = "Androidで開いている画面状態（フルプレーヤー・歌詞・キュー）をiPhoneにも反映します",
-                    checked = syncScreen,
-                    onCheckedChange = { CarPlayWebBridge.setSyncScreenNavigation(it) },
                 )
             }
 
@@ -602,7 +595,7 @@ fun CarPlaySheet(
                 Text(
                     text = "【方法A：通常のWi-Fiテザリング（一番簡単・設定不要）】\n" +
                         "1. 上の「通常のWi-Fiテザリング設定を開く」からGalaxyのモバイルホットスポットをオンにします。\n" +
-                        "2. iPhoneをテザリングWi-Fiに繋ぎ、上のQRコードをiPhoneのカメラで読み取るだけでSafariでBitChordが開き、Googleマップもそのまま使えます。\n\n" +
+                        "2. iPhoneをテザリングWi-Fiに繋ぎ、上のQRコードをiPhoneのカメラで読み取るだけでBitChord CarPlayアプリと接続され、Googleマップもそのまま使えます。\n\n" +
                         "【方法B：ローカル専用Wi-Fi電波でGoogleマップも使う場合】\n" +
                         "1. 「ローカル専用Wi-Fi電波を発信」をオンにし、「① Wi-Fi接続QR」をiPhoneカメラで読み取って接続します。\n" +
                         "2. iPhoneの「設定 > Wi-Fi > DIRECT-BC-BitChord右の(i) > 一番下のHTTPプロキシ > 自動」に `http://192.168.49.1:$serverPort/proxy.pac`（または手動でサーバー `192.168.49.1` / ポート `$serverPort`）を1回設定すると、次回からローカル専用Wi-FiのままGalaxyの5G/4G経由でGoogleマップも通信できます。",

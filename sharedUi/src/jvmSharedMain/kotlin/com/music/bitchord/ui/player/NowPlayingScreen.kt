@@ -68,6 +68,8 @@ import androidx.compose.material.icons.rounded.FastRewind
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.IosShare
 import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.DirectionsCar
+import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -867,6 +869,10 @@ fun NowPlayingScreen(
      * rather than a still of it.
      */
     onLiveCanvasChanged: (Boolean) -> Unit = {},
+    /** Whether audio output is routed to iPhone / CarPlay via BitChord bridge. */
+    carPlayAudioRouted: Boolean = false,
+    /** Toggle routing audio to iPhone / CarPlay. */
+    onToggleCarPlayAudio: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -3779,6 +3785,16 @@ fun NowPlayingScreen(
                             // there's no account to record it against — except on a
                             // local file or a finished download, whose star is the
                             // device's own Liked playlist and needs no account.
+                            if (onToggleCarPlayAudio != null) {
+                                CircleGlyph(
+                                    icon = if (carPlayAudioRouted) Icons.Rounded.DirectionsCar else Icons.Rounded.PhoneAndroid,
+                                    contentDescription = if (carPlayAudioRouted) "iPhone / CarPlay 出力中" else "Android 本体出力中",
+                                    onClick = onToggleCarPlayAudio,
+                                    active = carPlayAudioRouted,
+                                    haptic = if (carPlayAudioRouted) Haptic.ToggleOff else Haptic.ToggleOn,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                            }
                             if (signedIn || song.localUri != null) {
                                 val liked = likeStatus == LikeStatus.LIKE
                                 CircleGlyph(

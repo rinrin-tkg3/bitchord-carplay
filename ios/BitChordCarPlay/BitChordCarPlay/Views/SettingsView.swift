@@ -12,7 +12,69 @@ public struct SettingsView: View {
     public var body: some View {
         NavigationView {
             Form {
-                Section(header: Text("接続先 Galaxy (Android)")) {
+                Section(
+                    header: Text("CarPlay 接続制御"),
+                    footer: Text("CarPlayに接続されている時のみ再生します。未接続や切断時は自動で再生が一時停止します。")
+                        .font(.footnote)
+                        .foregroundColor(.gray)
+                ) {
+                    HStack {
+                        Text("CarPlay 接続状態")
+                        Spacer()
+                        if playback.isCarPlayConnected {
+                            HStack(spacing: 4) {
+                                Circle().fill(Color.green).frame(width: 8, height: 8)
+                                Text("CarPlay 接続中").foregroundColor(.green).font(.subheadline)
+                            }
+                        } else if playback.simulateCarPlayConnected {
+                            HStack(spacing: 4) {
+                                Circle().fill(Color.orange).frame(width: 8, height: 8)
+                                Text("擬似接続中 (デバッグ)").foregroundColor(.orange).font(.subheadline)
+                            }
+                        } else {
+                            HStack(spacing: 4) {
+                                Circle().fill(Color.red).frame(width: 8, height: 8)
+                                Text("未接続 (再生停止)").foregroundColor(.red).font(.subheadline)
+                            }
+                        }
+                    }
+
+                    Toggle(isOn: $playback.simulateCarPlayConnected) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("擬似CarPlayモード")
+                            Text("実車/ディスプレイなしでデバッグ再生を許可")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    }
+                }
+
+                Section(
+                    header: Text("接続先 Galaxy (Android)"),
+                    footer: Text("テザリング接続時、端末IPが変更されても自動探索でGalaxyを発見できます。")
+                        .font(.footnote)
+                        .foregroundColor(.gray)
+                ) {
+                    Button(action: {
+                        playback.triggerAutoDiscovery()
+                    }) {
+                        HStack {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                            Text("Galaxy を自動探索")
+                            Spacer()
+                            if playback.isDiscovering {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            }
+                        }
+                    }
+
+                    if !playback.discoveryStatusText.isEmpty {
+                        Text(playback.discoveryStatusText)
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+
                     HStack {
                         Text("IP / ホスト名")
                             .frame(width: 100, alignment: .leading)
@@ -91,6 +153,9 @@ public struct SettingsView: View {
             .onAppear {
                 inputHost = playback.serverHost
                 inputPort = String(playback.serverPort)
+            }
+            .onChange(of: playback.serverHost) { newHost in
+                inputHost = newHost
             }
         }
     }

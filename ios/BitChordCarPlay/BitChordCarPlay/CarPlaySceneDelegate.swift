@@ -6,6 +6,8 @@ public class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelega
 
     public func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene, didConnect interfaceController: CPInterfaceController) {
         self.interfaceController = interfaceController
+        PlaybackService.shared.isCarPlayConnected = true
+        PlaybackService.shared.triggerAutoDiscovery()
 
         // Apple standard Now Playing screen on CarPlay display
         let nowPlayingTemplate = CPNowPlayingTemplate.shared
@@ -14,5 +16,6 @@ public class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelega
 
     public func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene, didDisconnectInterfaceController interfaceController: CPInterfaceController) {
         self.interfaceController = nil
+        PlaybackService.shared.isCarPlayConnected = false
     }
 }

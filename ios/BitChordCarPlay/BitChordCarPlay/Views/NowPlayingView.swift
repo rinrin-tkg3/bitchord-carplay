@@ -16,71 +16,64 @@ public struct NowPlayingView: View {
                 Color(red: 0.06, green: 0.07, blue: 0.09)
                     .ignoresSafeArea()
 
-                VStack(spacing: 24) {
-                    // Header Status
+                VStack(spacing: 16) {
+                    // Header Bar (Status & Settings, with top padding to clear battery / status bar)
                     HStack {
+                        // Galaxy Server status pill
                         HStack(spacing: 6) {
                             Circle()
-                                .fill(playback.isConnected ? Color.green : Color.red)
+                                .fill(playback.isConnected ? Color.green : (playback.isDiscovering ? Color.orange : Color.red))
                                 .frame(width: 8, height: 8)
-                            Text(playback.isConnected ? "Galaxy接続中" : "未接続")
+                            Text(playback.isConnected ? "Galaxy接続中" : (playback.isDiscovering ? "Galaxy探索中..." : "Galaxy未接続"))
                                 .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(.gray)
+                                .foregroundColor(.white.opacity(0.85))
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Color.white.opacity(0.06))
-                        .cornerRadius(12)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.08))
+                        .cornerRadius(14)
 
                         Spacer()
 
-                        Button(action: { showingQueue = true }) {
-                            Image(systemName: "list.bullet")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundColor(.white)
-                                .frame(width: 40, height: 40)
-                                .background(Color.white.opacity(0.08))
-                                .clipShape(Circle())
-                        }
-
+                        // Settings Button (moved down to prevent overlapping battery indicator)
                         Button(action: { showingSettings = true }) {
                             Image(systemName: "gearshape.fill")
                                 .font(.system(size: 18, weight: .semibold))
                                 .foregroundColor(.white)
-                                .frame(width: 40, height: 40)
+                                .frame(width: 38, height: 38)
                                 .background(Color.white.opacity(0.08))
                                 .clipShape(Circle())
                         }
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 10)
+                    .padding(.horizontal, 22)
+                    .padding(.top, 36) // Generous top padding for iPhone 7 status bar & battery
 
-                    Spacer(minLength: 10)
+                    Spacer(minLength: 6)
 
                     // Artwork View
                     AsyncArtworkView(url: artworkUrl)
-                        .frame(width: 280, height: 280)
-                        .cornerRadius(24)
-                        .shadow(color: Color.black.opacity(0.4), radius: 20, x: 0, y: 10)
+                        .frame(width: 260, height: 260)
+                        .cornerRadius(22)
+                        .shadow(color: Color.black.opacity(0.45), radius: 18, x: 0, y: 8)
 
-                    Spacer(minLength: 10)
+                    Spacer(minLength: 6)
 
                     // Metadata
-                    VStack(spacing: 6) {
+                    VStack(spacing: 5) {
                         Text(playback.state?.title.isEmpty == false ? playback.state!.title : "曲が選択されていません")
-                            .font(.system(size: 22, weight: .bold))
+                            .font(.system(size: 21, weight: .bold))
                             .foregroundColor(.white)
                             .lineLimit(1)
                             .multilineTextAlignment(.center)
 
                         Text(playback.state?.artist.isEmpty == false ? playback.state!.artist : "BitChord Host")
-                            .font(.system(size: 16, weight: .medium))
+                            .font(.system(size: 15, weight: .medium))
                             .foregroundColor(.gray)
                             .lineLimit(1)
 
                         if let album = playback.state?.album, !album.isEmpty {
                             Text(album)
-                                .font(.system(size: 13, weight: .regular))
+                                .font(.system(size: 12, weight: .regular))
                                 .foregroundColor(.gray.opacity(0.7))
                                 .lineLimit(1)
                         }
@@ -88,7 +81,7 @@ public struct NowPlayingView: View {
                     .padding(.horizontal, 30)
 
                     // Scrubber Bar
-                    VStack(spacing: 8) {
+                    VStack(spacing: 6) {
                         Slider(
                             value: Binding(
                                 get: { isDraggingSlider ? sliderValue : playback.currentPositionSec },
@@ -131,8 +124,8 @@ public struct NowPlayingView: View {
 
                         Button(action: { playback.togglePlayPause() }) {
                             Image(systemName: playback.isLocalPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                .font(.system(size: 68))
-                                .foregroundColor(.white)
+                                .font(.system(size: 64))
+                                .foregroundColor(playback.isEffectivelyCarPlayConnected ? .white : .white.opacity(0.4))
                         }
 
                         Button(action: { playback.nextTrack() }) {
@@ -141,7 +134,50 @@ public struct NowPlayingView: View {
                                 .foregroundColor(.white)
                         }
                     }
-                    .padding(.bottom, 30)
+                    .padding(.vertical, 4)
+
+                    // Bottom Row: CarPlay Indicator & Queue Button (Natural Music App Placement)
+                    HStack {
+                        // CarPlay status indicator
+                        HStack(spacing: 6) {
+                            Image(systemName: "car.fill")
+                                .font(.system(size: 13))
+                            if playback.isCarPlayConnected {
+                                Text("CarPlay接続中")
+                                    .font(.system(size: 12, weight: .semibold))
+                            } else if playback.simulateCarPlayConnected {
+                                Text("擬似CarPlayモード")
+                                    .font(.system(size: 12, weight: .semibold))
+                            } else {
+                                Text("CarPlay接続待ち")
+                                    .font(.system(size: 12, weight: .regular))
+                            }
+                        }
+                        .foregroundColor(playback.isEffectivelyCarPlayConnected ? .green : .gray)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.06))
+                        .cornerRadius(12)
+
+                        Spacer()
+
+                        // Queue Button (Standard placement at bottom right)
+                        Button(action: { showingQueue = true }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "list.bullet")
+                                    .font(.system(size: 16, weight: .semibold))
+                                Text("キュー")
+                                    .font(.system(size: 13, weight: .medium))
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Color.white.opacity(0.09))
+                            .cornerRadius(14)
+                        }
+                    }
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 24)
                 }
             }
             .navigationBarHidden(true)

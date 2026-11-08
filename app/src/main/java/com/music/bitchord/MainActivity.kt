@@ -668,6 +668,7 @@ private fun BitChordApp(
     var librarySortMenuOpen by remember { mutableStateOf(false) }
     var showLyricsSources by remember { mutableStateOf(false) }
     var showCarPlaySheet by remember { mutableStateOf(false) }
+    val carPlayAudioSession by CarPlayWebBridge.carPlaySession.collectAsStateWithLifecycle()
     var showAppLanguage by remember { mutableStateOf(false) }
     var showTranslationLanguage by remember { mutableStateOf(false) }
     var showAccountSelector by remember { mutableStateOf(false) }
@@ -2691,6 +2692,10 @@ private fun BitChordApp(
             song = displayedSong,
             playedBy = playedBy,
             accountName = account?.name,
+            carPlayAudioRouted = carPlayAudioSession,
+            onToggleCarPlayAudio = {
+                CarPlayWebBridge.setAudioRoutedToClient(!carPlayAudioSession, isUserExplicit = true)
+            },
             windowWidth = windowWidth,
             windowHeight = windowHeight,
             // A canvas under the ⋯ menu holds still. Asked, not passed — see
