@@ -2,7 +2,6 @@ import Foundation
 import AVFoundation
 import MediaPlayer
 import Combine
-import Network
 
 public class PlaybackService: NSObject, ObservableObject {
     public static let shared = PlaybackService()
@@ -524,7 +523,7 @@ public class PlaybackService: NSObject, ObservableObject {
     public func reportPlaybackToHost(ended: Bool = false) {
         // Only report clock if iPhone is the active routed audio speaker!
         guard state?.activeOnIphone == true else { return }
-        guard let mediaId = currentLoadedMediaId ?? state?.videoId,
+        guard let mediaId = currentLoadedMediaId ?? state?.mediaId,
               let url = URL(string: "\(baseUrl)/api/report?cid=ios_carplay") else { return }
         let isPlayingNow = (player?.timeControlStatus == .playing || (player?.rate ?? 0) > 0) && !ended
         let isBuffering = player?.currentItem?.isPlaybackLikelyToKeepUp == false && isPlayingNow
