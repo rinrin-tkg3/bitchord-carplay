@@ -24,180 +24,196 @@ public struct NowPlayingView: View {
 
     public var body: some View {
         NavigationView {
-            ZStack {
-                // Background dark theme
-                Color(red: 0.06, green: 0.07, blue: 0.09)
-                    .ignoresSafeArea()
+            GeometryReader { geometry in
+                let screenHeight = geometry.size.height
+                let screenWidth = geometry.size.width
+                // Dynamic compact scaling for iPhone 7 (height ~667) and smaller devices
+                let isCompact = screenHeight < 720
+                let artworkSize = isCompact ? min(screenWidth * 0.52, 205.0) : min(screenWidth * 0.65, 260.0)
+                let headerTopPad = isCompact ? 10.0 : 20.0
+                let vSpacing = isCompact ? 10.0 : 16.0
+                let bottomPad = isCompact ? 14.0 : 24.0
 
-                VStack(spacing: 16) {
-                    // Header Bar (Status & Settings, with top padding to clear battery / status bar)
-                    HStack {
-                        // Galaxy Server status pill (Tappable to reconnect Wi-Fi if disconnected)
-                        Button(action: {
-                            if !playback.isConnected {
-                                wifiService.triggerReconnect(force: true)
-                                playback.triggerAutoDiscovery()
-                            }
-                        }) {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(playback.isConnected ? Color.green : (playback.isDiscovering || wifiService.isReconnecting ? Color.orange : Color.red))
-                                    .frame(width: 8, height: 8)
-                                Text(playback.isConnected ? "Galaxy接続中" : (wifiService.isReconnecting ? "Wi-Fi再接続中..." : (playback.isDiscovering ? "Galaxy探索中..." : "未接続 (タップで再接続)")))
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.85))
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.white.opacity(0.08))
-                            .cornerRadius(14)
-                        }
+                ZStack {
+                    // Background dark theme
+                    Color(red: 0.06, green: 0.07, blue: 0.09)
+                        .ignoresSafeArea()
 
-                        Spacer()
-
-                        // Settings Button (moved down to prevent overlapping battery indicator)
-                        Button(action: { showingSettings = true }) {
-                            Image(systemName: "gearshape.fill")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundColor(.white)
-                                .frame(width: 38, height: 38)
-                                .background(Color.white.opacity(0.08))
-                                .clipShape(Circle())
-                        }
-                    }
-                    .padding(.horizontal, 22)
-                    .padding(.top, 36) // Generous top padding for iPhone 7 status bar & battery
-
-                    Spacer(minLength: 6)
-
-                    // Artwork View
-                    AsyncArtworkView(url: artworkUrl)
-                        .frame(width: 260, height: 260)
-                        .cornerRadius(22)
-                        .shadow(color: Color.black.opacity(0.45), radius: 18, x: 0, y: 8)
-
-                    Spacer(minLength: 6)
-
-                    // Metadata
-                    VStack(spacing: 5) {
-                        Text(playback.state?.title.isEmpty == false ? playback.state!.title : "曲が選択されていません")
-                            .font(.system(size: 21, weight: .bold))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                            .multilineTextAlignment(.center)
-
-                        Text(playback.state?.artist.isEmpty == false ? playback.state!.artist : "BitChord Host")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundColor(.gray)
-                            .lineLimit(1)
-
-                        if let album = playback.state?.album, !album.isEmpty {
-                            Text(album)
-                                .font(.system(size: 12, weight: .regular))
-                                .foregroundColor(.gray.opacity(0.7))
-                                .lineLimit(1)
-                        }
-                    }
-                    .padding(.horizontal, 30)
-
-                    // Scrubber Bar
-                    VStack(spacing: 6) {
-                        Slider(
-                            value: Binding(
-                                get: { isDraggingSlider ? sliderValue : playback.currentPositionSec },
-                                set: { newValue in
-                                    isDraggingSlider = true
-                                    sliderValue = newValue
-                                }
-                            ),
-                            in: 0...max(1.0, playback.durationSec),
-                            onEditingChanged: { editing in
-                                if !editing {
-                                    playback.seekTo(positionMs: Int64(sliderValue * 1000))
-                                    isDraggingSlider = false
-                                }
-                            }
-                        )
-                        .accentColor(.white)
-
+                    VStack(spacing: vSpacing) {
+                        // Header Bar (Status & Settings, perfectly positioned for iPhone 7 status bar)
                         HStack {
-                            Text(formatTime(isDraggingSlider ? sliderValue : playback.currentPositionSec))
-                                .font(.system(size: 12))
-                                .monospacedDigit()
-                                .foregroundColor(.gray)
+                            // Galaxy Server status pill (Tappable to reconnect Wi-Fi if disconnected)
+                            Button(action: {
+                                if !playback.isConnected {
+                                    wifiService.triggerReconnect(force: true)
+                                    playback.triggerAutoDiscovery()
+                                }
+                            }) {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(playback.isConnected ? Color.green : (playback.isDiscovering || wifiService.isReconnecting ? Color.orange : Color.red))
+                                        .frame(width: 7, height: 7)
+                                    Text(playback.isConnected ? "Galaxy接続中" : (wifiService.isReconnecting ? "Wi-Fi再接続中..." : (playback.isDiscovering ? "Galaxy探索中..." : "未接続 (再接続)")))
+                                        .font(.system(size: isCompact ? 11 : 13, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.85))
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color.white.opacity(0.08))
+                                .cornerRadius(12)
+                            }
+
                             Spacer()
-                            Text(formatTime(playback.durationSec))
-                                .font(.system(size: 12))
-                                .monospacedDigit()
+
+                            // Settings Button
+                            Button(action: { showingSettings = true }) {
+                                Image(systemName: "gearshape.fill")
+                                    .font(.system(size: isCompact ? 15 : 18, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .frame(width: isCompact ? 32 : 38, height: isCompact ? 32 : 38)
+                                    .background(Color.white.opacity(0.08))
+                                    .clipShape(Circle())
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.top, headerTopPad)
+
+                        Spacer(minLength: 2)
+
+                        // Artwork View (Auto scaled to never push bottom controls offscreen)
+                        AsyncArtworkView(url: artworkUrl)
+                            .frame(width: artworkSize, height: artworkSize)
+                            .cornerRadius(isCompact ? 16 : 22)
+                            .shadow(color: Color.black.opacity(0.45), radius: isCompact ? 12 : 18, x: 0, y: 6)
+
+                        Spacer(minLength: 2)
+
+                        // Metadata (Title, Artist, Album)
+                        VStack(spacing: 3) {
+                            Text(playback.state?.title.isEmpty == false ? playback.state!.title : "曲が選択されていません")
+                                .font(.system(size: isCompact ? 18 : 21, weight: .bold))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                                .multilineTextAlignment(.center)
+
+                            Text(playback.state?.artist.isEmpty == false ? playback.state!.artist : "BitChord Host")
+                                .font(.system(size: isCompact ? 13 : 15, weight: .medium))
                                 .foregroundColor(.gray)
-                        }
-                    }
-                    .padding(.horizontal, 28)
+                                .lineLimit(1)
 
-                    // Transport Controls
-                    HStack(spacing: 44) {
-                        Button(action: { playback.previousTrack() }) {
-                            Image(systemName: "backward.fill")
-                                .font(.system(size: 28))
-                                .foregroundColor(.white)
-                        }
-
-                        Button(action: { playback.togglePlayPause() }) {
-                            Image(systemName: isCurrentlyPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                .font(.system(size: 64))
-                                .foregroundColor(playback.isEffectivelyCarPlayConnected ? .white : .white.opacity(0.4))
-                        }
-
-                        Button(action: { playback.nextTrack() }) {
-                            Image(systemName: "forward.fill")
-                                .font(.system(size: 28))
-                                .foregroundColor(.white)
-                        }
-                    }
-                    .padding(.vertical, 4)
-
-                    // Bottom Row: CarPlay Indicator & Queue Button (Natural Music App Placement)
-                    HStack {
-                        // CarPlay status indicator
-                        HStack(spacing: 6) {
-                            Image(systemName: "car.fill")
-                                .font(.system(size: 13))
-                            if playback.isCarPlayConnected {
-                                Text("CarPlay接続中")
-                                    .font(.system(size: 12, weight: .semibold))
-                            } else if playback.simulateCarPlayConnected {
-                                Text("擬似CarPlayモード")
-                                    .font(.system(size: 12, weight: .semibold))
-                            } else {
-                                Text("CarPlay接続待ち")
-                                    .font(.system(size: 12, weight: .regular))
+                            if let album = playback.state?.album, !album.isEmpty {
+                                Text(album)
+                                    .font(.system(size: isCompact ? 11 : 12, weight: .regular))
+                                    .foregroundColor(.gray.opacity(0.7))
+                                    .lineLimit(1)
                             }
                         }
-                        .foregroundColor(playback.isEffectivelyCarPlayConnected ? .green : .gray)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.white.opacity(0.06))
-                        .cornerRadius(12)
+                        .padding(.horizontal, 24)
 
-                        Spacer()
+                        // Scrubber Bar
+                        VStack(spacing: 4) {
+                            Slider(
+                                value: Binding(
+                                    get: { isDraggingSlider ? sliderValue : playback.currentPositionSec },
+                                    set: { newValue in
+                                        isDraggingSlider = true
+                                        sliderValue = newValue
+                                    }
+                                ),
+                                in: 0...max(1.0, playback.durationSec),
+                                onEditingChanged: { editing in
+                                    if !editing {
+                                        playback.seekTo(positionMs: Int64(sliderValue * 1000))
+                                        isDraggingSlider = false
+                                    }
+                                }
+                            )
+                            .accentColor(.white)
 
-                        // Queue Button (Standard placement at bottom right)
-                        Button(action: { showingQueue = true }) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "list.bullet")
-                                    .font(.system(size: 16, weight: .semibold))
-                                Text("キュー")
-                                    .font(.system(size: 13, weight: .medium))
-                            }
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(Color.white.opacity(0.09))
-                            .cornerRadius(14)
+                            HStack {
+                                Text(formatTime(isDraggingSlider ? sliderValue : playback.currentPositionSec))
+                                    .font(.system(size: 11))
+                                    .monospacedDigit()
+                                    .foregroundColor(.gray)
+                                Spacer()
+                                Text(formatTime(playback.durationSec))
+                                    .font(.system(size: 11))
+                                    .monospacedDigit()
+                                    .foregroundColor(.gray)
+                                }
                         }
+                        .padding(.horizontal, 24)
+
+                        // Transport Controls
+                        HStack(spacing: isCompact ? 36 : 44) {
+                            Button(action: { playback.previousTrack() }) {
+                                Image(systemName: "backward.fill")
+                                    .font(.system(size: isCompact ? 22 : 28))
+                                    .foregroundColor(.white)
+                            }
+
+                            Button(action: { playback.togglePlayPause() }) {
+                                Image(systemName: isCurrentlyPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                    .font(.system(size: isCompact ? 54 : 64))
+                                    .foregroundColor(playback.isEffectivelyCarPlayConnected ? .white : .white.opacity(0.4))
+                            }
+
+                            Button(action: { playback.nextTrack() }) {
+                                Image(systemName: "forward.fill")
+                                    .font(.system(size: isCompact ? 22 : 28))
+                                    .foregroundColor(.white)
+                            }
+                        }
+                        .padding(.vertical, 2)
+
+                        // Bottom Row: CarPlay Indicator & Queue Button (Always completely visible!)
+                        HStack {
+                            // CarPlay status indicator
+                            HStack(spacing: 5) {
+                                Image(systemName: "car.fill")
+                                    .font(.system(size: isCompact ? 11 : 13))
+                                if playback.isCarPlayConnected {
+                                    Text("CarPlay接続中")
+                                        .font(.system(size: isCompact ? 11 : 12, weight: .semibold))
+                                } else if playback.simulateCarPlayConnected {
+                                    Text("擬似CarPlay")
+                                        .font(.system(size: isCompact ? 11 : 12, weight: .semibold))
+                                } else {
+                                    Text("CarPlay待機中")
+                                        .font(.system(size: isCompact ? 11 : 12, weight: .regular))
+                                }
+                            }
+                            .foregroundColor(playback.isEffectivelyCarPlayConnected ? .green : .gray)
+                            .padding(.horizontal, isCompact ? 10 : 12)
+                            .padding(.vertical, isCompact ? 5 : 6)
+                            .background(Color.white.opacity(0.06))
+                            .cornerRadius(12)
+
+                            Spacer()
+
+                            // Queue Button (Standard placement at bottom right)
+                            Button(action: { showingQueue = true }) {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "list.bullet")
+                                        .font(.system(size: isCompact ? 14 : 16, weight: .semibold))
+                                    Text("キュー")
+                                        .font(.system(size: isCompact ? 12 : 13, weight: .medium))
+                                    if !playback.queue.isEmpty {
+                                        Text("(\(playback.queue.count))")
+                                            .font(.system(size: isCompact ? 10 : 11, weight: .bold))
+                                            .foregroundColor(.white.opacity(0.7))
+                                    }
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, isCompact ? 12 : 14)
+                                .padding(.vertical, isCompact ? 6 : 8)
+                                .background(Color.white.opacity(0.09))
+                                .cornerRadius(14)
+                            }
+                        }
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, bottomPad)
                     }
-                    .padding(.horizontal, 28)
-                    .padding(.bottom, 24)
                 }
             }
             .navigationBarHidden(true)
@@ -258,8 +274,8 @@ public struct AsyncArtworkView: View {
         ZStack {
             Color.white.opacity(0.08)
             Image(systemName: "music.note")
-                .font(.system(size: 64))
-                .foregroundColor(.white.opacity(0.3))
+                .font(.system(size: 48))
+                .foregroundColor(.white.opacity(0.35))
         }
     }
 }

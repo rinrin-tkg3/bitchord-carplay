@@ -29,41 +29,50 @@ public struct QueueView: View {
                                 playback.playQueueIndex(item.index)
                                 presentationMode.wrappedValue.dismiss()
                             }) {
-                                HStack(spacing: 14) {
+                                HStack(spacing: 12) {
+                                    // Index or Playing Icon
+                                    if isCurrent {
+                                        Image(systemName: "speaker.wave.3.fill")
+                                            .font(.system(size: 14, weight: .bold))
+                                            .foregroundColor(.green)
+                                            .frame(width: 20)
+                                    } else {
+                                        Text("\(item.index + 1)")
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundColor(.gray.opacity(0.6))
+                                            .frame(width: 20)
+                                    }
+
                                     // Thumbnail
                                     AsyncArtworkView(url: artworkUrl(for: item.thumbnailUrl))
-                                        .frame(width: 48, height: 48)
-                                        .cornerRadius(8)
+                                        .frame(width: 44, height: 44)
+                                        .cornerRadius(6)
 
-                                    VStack(alignment: .leading, spacing: 4) {
+                                    // Title & Artist (2 lines to prevent clipping)
+                                    VStack(alignment: .leading, spacing: 3) {
                                         Text(item.title)
-                                            .font(.system(size: 15, weight: isCurrent ? .bold : .medium))
+                                            .font(.system(size: 14, weight: isCurrent ? .bold : .medium))
                                             .foregroundColor(isCurrent ? .green : .white)
-                                            .lineLimit(1)
+                                            .lineLimit(2)
+                                            .fixedSize(horizontal: false, vertical: true)
 
                                         Text(item.artist)
-                                            .font(.system(size: 13))
+                                            .font(.system(size: 12))
                                             .foregroundColor(.gray)
                                             .lineLimit(1)
                                     }
 
                                     Spacer()
-
-                                    if isCurrent {
-                                        Image(systemName: "speaker.wave.3.fill")
-                                            .font(.system(size: 14))
-                                            .foregroundColor(.green)
-                                    }
                                 }
-                                .padding(.vertical, 4)
+                                .padding(.vertical, 3)
                             }
-                            .listRowBackground(Color.white.opacity(isCurrent ? 0.08 : 0.02))
+                            .listRowBackground(Color.white.opacity(isCurrent ? 0.09 : 0.02))
                         }
                     }
                     .listStyle(PlainListStyle())
                 }
             }
-            .navigationBarTitle("再生キュー", displayMode: .inline)
+            .navigationBarTitle("再生キュー (\(playback.queue.count))", displayMode: .inline)
             .navigationBarItems(trailing: Button("閉じる") {
                 presentationMode.wrappedValue.dismiss()
             })
