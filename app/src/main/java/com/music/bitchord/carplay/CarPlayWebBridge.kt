@@ -1404,7 +1404,7 @@ internal class CarPlayWebSpeaker(
                 volume = 100,
                 at = now,
             )
-            val reachedAuthoritativeEnd = !graceActive &&
+            val reachedAuthoritativeEnd = !isPendingSeek &&
                 effectivePlaying &&
                 authDurMs > 5_000L &&
                 rawEffectivePos >= authDurMs - 550L
