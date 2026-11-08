@@ -2,6 +2,7 @@ import SwiftUI
 
 public struct SettingsView: View {
     @ObservedObject var playback = PlaybackService.shared
+    @ObservedObject var wifiService = WiFiReconnectService.shared
     @Environment(\.presentationMode) var presentationMode
     @State private var inputHost: String = ""
     @State private var inputPort: String = ""
@@ -100,6 +101,59 @@ public struct SettingsView: View {
                                     .font(.caption)
                                     .foregroundColor(status.contains("成功") ? .green : .red)
                             }
+                        }
+                    }
+                }
+
+                Section(
+                    header: Text("テザリング Wi-Fi 再接続支援"),
+                    footer: Text("iPhoneのWi-Fi一覧にあるのに自動で繋がらない問題を解決します。SSIDを登録しておくと、CarPlay接続時や切断時にアプリ側から自動で接続を要求します。")
+                        .font(.footnote)
+                        .foregroundColor(.gray)
+                ) {
+                    HStack {
+                        Text("SSID")
+                            .frame(width: 100, alignment: .leading)
+                        TextField("例: Galaxy S25 / ホットスポット名", text: $wifiService.targetSsid)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                    }
+
+                    HStack {
+                        Text("パスワード")
+                            .frame(width: 100, alignment: .leading)
+                        SecureField("未設定または空欄可", text: $wifiService.targetPassword)
+                    }
+
+                    Toggle("CarPlay接続時に自動再接続", isOn: $wifiService.autoReconnectOnCarPlay)
+
+                    Button(action: {
+                        wifiService.triggerReconnect(force: true)
+                    }) {
+                        HStack {
+                            Image(systemName: "wifi")
+                            Text("Wi-Fi へ今すぐ再接続要求")
+                            Spacer()
+                            if wifiService.isReconnecting {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            }
+                        }
+                    }
+
+                    if !wifiService.statusMessage.isEmpty {
+                        Text(wifiService.statusMessage)
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+
+                    Button(action: {
+                        wifiService.openSystemWiFiSettings()
+                    }) {
+                        HStack {
+                            Image(systemName: "arrow.up.forward.app")
+                            Text("iOS の Wi-Fi 設定画面を開く")
+                            Spacer()
                         }
                     }
                 }

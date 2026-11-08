@@ -2,12 +2,18 @@ import SwiftUI
 
 public struct NowPlayingView: View {
     @ObservedObject var playback = PlaybackService.shared
+    @ObservedObject var wifiService = WiFiReconnectService.shared
     @State private var showingQueue = false
     @State private var showingSettings = false
     @State private var sliderValue: Double = 0.0
     @State private var isDraggingSlider = false
 
     public init() {}
+
+    private var isCurrentlyPlaying: Bool {
+        let isRouted = playback.state?.activeOnIphone == true
+        return isRouted ? playback.isLocalPlaying : ((playback.state?.isPlaying == true) || (playback.state?.playWhenReady == true))
+    }
 
     public var body: some View {
         NavigationView {
@@ -19,19 +25,26 @@ public struct NowPlayingView: View {
                 VStack(spacing: 16) {
                     // Header Bar (Status & Settings, with top padding to clear battery / status bar)
                     HStack {
-                        // Galaxy Server status pill
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(playback.isConnected ? Color.green : (playback.isDiscovering ? Color.orange : Color.red))
-                                .frame(width: 8, height: 8)
-                            Text(playback.isConnected ? "Galaxy接続中" : (playback.isDiscovering ? "Galaxy探索中..." : "Galaxy未接続"))
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(.white.opacity(0.85))
+                        // Galaxy Server status pill (Tappable to reconnect Wi-Fi if disconnected)
+                        Button(action: {
+                            if !playback.isConnected {
+                                wifiService.triggerReconnect(force: true)
+                                playback.triggerAutoDiscovery()
+                            }
+                        }) {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(playback.isConnected ? Color.green : (playback.isDiscovering || wifiService.isReconnecting ? Color.orange : Color.red))
+                                    .frame(width: 8, height: 8)
+                                Text(playback.isConnected ? "Galaxy接続中" : (wifiService.isReconnecting ? "Wi-Fi再接続中..." : (playback.isDiscovering ? "Galaxy探索中..." : "未接続 (タップで再接続)")))
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.85))
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.white.opacity(0.08))
+                            .cornerRadius(14)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.white.opacity(0.08))
-                        .cornerRadius(14)
 
                         Spacer()
 
@@ -123,7 +136,7 @@ public struct NowPlayingView: View {
                         }
 
                         Button(action: { playback.togglePlayPause() }) {
-                            Image(systemName: playback.isLocalPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            Image(systemName: isCurrentlyPlaying ? "pause.circle.fill" : "play.circle.fill")
                                 .font(.system(size: 64))
                                 .foregroundColor(playback.isEffectivelyCarPlayConnected ? .white : .white.opacity(0.4))
                         }

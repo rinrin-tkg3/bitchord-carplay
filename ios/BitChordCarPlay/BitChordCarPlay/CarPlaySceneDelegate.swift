@@ -7,6 +7,7 @@ public class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelega
     public func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene, didConnect interfaceController: CPInterfaceController) {
         self.interfaceController = interfaceController
         PlaybackService.shared.isCarPlayConnected = true
+        WiFiReconnectService.shared.triggerReconnect()
         PlaybackService.shared.triggerAutoDiscovery()
 
         // Apple standard Now Playing screen on CarPlay display

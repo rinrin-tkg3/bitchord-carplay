@@ -14,6 +14,7 @@
 		1005 /* NowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2005 /* NowPlayingView.swift */; };
 		1006 /* QueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2006 /* QueueView.swift */; };
 		1007 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2007 /* SettingsView.swift */; };
+		1008 /* WiFiReconnectService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2009 /* WiFiReconnectService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -26,6 +27,7 @@
 		2006 /* QueueView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueueView.swift; sourceTree = "<group>"; };
 		2007 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		2008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		2009 /* WiFiReconnectService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiReconnectService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -72,6 +74,7 @@
 			isa = PBXGroup;
 			children = (
 				2004 /* PlaybackService.swift */,
+				2009 /* WiFiReconnectService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -164,6 +167,7 @@
 				1005 /* NowPlayingView.swift in Sources */,
 				1006 /* QueueView.swift in Sources */,
 				1007 /* SettingsView.swift in Sources */,
+				1008 /* WiFiReconnectService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

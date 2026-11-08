@@ -128,7 +128,12 @@ public class PlaybackService: NSObject, ObservableObject {
                 if error != nil {
                     self.isConnected = false
                     self.disconnectCount += 1
-                    // If disconnected for more than 4 ticks (~2 sec), auto probe network
+
+                    // After 2 missed polls (~1s), request Wi-Fi reconnection if enabled
+                    if self.disconnectCount == 2 {
+                        WiFiReconnectService.shared.triggerReconnect()
+                    }
+                    // After 4 missed polls (~2s), start network auto-discovery
                     if self.disconnectCount >= 4 && !self.isDiscovering {
                         self.triggerAutoDiscovery()
                     }
@@ -159,28 +164,52 @@ public class PlaybackService: NSObject, ObservableObject {
             self.queue = q
         }
 
+        let isRoutedToIphone = newState.activeOnIphone == true
+        let hostWantsPlay = (newState.playWhenReady == true) || (newState.isPlaying == true)
+
         // Track changed
         if prev?.mediaId != newState.mediaId, let newId = newState.mediaId {
-            loadAndPlayTrack(videoId: newId, startPositionMs: newState.positionMs)
+            if isRoutedToIphone {
+                loadAndPlayTrack(videoId: newId, startPositionMs: newState.positionMs)
+            } else {
+                self.currentLoadedMediaId = newId
+            }
         }
 
         // Remote Seek occurred from Android host
         if let seekSeq = newState.seekSeq, seekSeq != self.lastAppliedSeekSeq {
             self.lastAppliedSeekSeq = seekSeq
             let targetMs = newState.wantedSeekMs ?? newState.positionMs
-            seekTo(positionMs: targetMs, notifyHost: false)
+            if isRoutedToIphone {
+                seekTo(positionMs: targetMs, notifyHost: false)
+            }
         }
 
-        // Play / Pause synchronization: only play if effectively connected to CarPlay
-        let wantsPlay = (newState.playWhenReady == true) || (newState.isPlaying == true)
-        if wantsPlay && isEffectivelyCarPlayConnected {
+        // Strict Mutual Exclusion for Sound Output:
+        // Sound is ONLY emitted on iPhone if:
+        // 1. Android host has routed audio to iPhone (activeOnIphone == true)
+        // 2. AND host wants playback (isPlaying == true or playWhenReady == true)
+        // 3. AND device is effectively connected to CarPlay (or debug simulation)
+        if isRoutedToIphone && hostWantsPlay && isEffectivelyCarPlayConnected {
             if player?.timeControlStatus != .playing {
                 player?.play()
                 isLocalPlaying = true
             }
-        } else if player?.timeControlStatus == .playing {
-            player?.pause()
-            isLocalPlaying = false
+        } else {
+            // Under ALL other conditions (e.g. Android output active, paused, or CarPlay disconnected),
+            // iPhone player MUST be paused immediately to guarantee no dual audio occurs!
+            if player?.timeControlStatus == .playing || isLocalPlaying {
+                player?.pause()
+                isLocalPlaying = false
+            }
+        }
+
+        // When Android speaker is playing, synchronize UI progress from host state
+        if !isRoutedToIphone && !self.isSeekingLocally {
+            self.currentPositionSec = Double(max(0, newState.positionMs)) / 1000.0
+            if newState.durationMs > 0 {
+                self.durationSec = Double(newState.durationMs) / 1000.0
+            }
         }
 
         updateNowPlayingInfo()
@@ -247,7 +276,7 @@ public class PlaybackService: NSObject, ObservableObject {
 
         let asset = AVURLAsset(url: url)
         let playerItem = AVPlayerItem(asset: asset)
-        
+
         NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(playerItemDidReachEnd), name: .AVPlayerItemDidPlayToEndTime, object: playerItem)
 
@@ -262,7 +291,8 @@ public class PlaybackService: NSObject, ObservableObject {
             player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
         }
 
-        if isEffectivelyCarPlayConnected {
+        let isRoutedToIphone = state?.activeOnIphone == true
+        if isRoutedToIphone && isEffectivelyCarPlayConnected {
             player?.play()
             isLocalPlaying = true
         } else {
@@ -273,21 +303,26 @@ public class PlaybackService: NSObject, ObservableObject {
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         timeObserverToken = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self = self, !self.isSeekingLocally else { return }
-            let sec = CMTimeGetSeconds(time)
-            if !sec.isNaN && !sec.isInfinite {
-                self.currentPositionSec = sec
-            }
-            if let dur = self.player?.currentItem?.duration {
-                let dSec = CMTimeGetSeconds(dur)
-                if !dSec.isNaN && !dSec.isInfinite && dSec > 0 {
-                    self.durationSec = dSec
+            // Only update position from local player if routed to iPhone
+            if self.state?.activeOnIphone == true {
+                let sec = CMTimeGetSeconds(time)
+                if !sec.isNaN && !sec.isInfinite {
+                    self.currentPositionSec = sec
+                }
+                if let dur = self.player?.currentItem?.duration {
+                    let dSec = CMTimeGetSeconds(dur)
+                    if !dSec.isNaN && !dSec.isInfinite && dSec > 0 {
+                        self.durationSec = dSec
+                    }
                 }
             }
         }
     }
 
     @objc private func playerItemDidReachEnd() {
-        reportPlaybackToHost(ended: true)
+        if state?.activeOnIphone == true {
+            reportPlaybackToHost(ended: true)
+        }
         nextTrack()
     }
 
@@ -297,7 +332,6 @@ public class PlaybackService: NSObject, ObservableObject {
         isDiscovering = true
         discoveryStatusText = "Galaxy探索中..."
 
-        // Generate candidate hosts (Tethering gateways, known subnets, and current serverHost)
         var candidates: [String] = []
         if !serverHost.isEmpty {
             candidates.append(serverHost)
@@ -311,7 +345,6 @@ public class PlaybackService: NSObject, ObservableObject {
         candidates.append("192.168.11.1")
         candidates.append("192.168.11.15")
 
-        // Deduplicate
         let uniqueCandidates = Array(NSOrderedSet(array: candidates)) as! [String]
         let group = DispatchGroup()
         var foundIp: String? = nil
@@ -354,23 +387,33 @@ public class PlaybackService: NSObject, ObservableObject {
             print("[PlaybackService] Playback blocked: CarPlay is not connected")
             return
         }
-        if isLocalPlaying {
-            player?.pause()
-            isLocalPlaying = false
-            sendCommand("pause")
+
+        let isRouted = state?.activeOnIphone == true
+        let currentlyPlaying = isRouted ? isLocalPlaying : ((state?.isPlaying == true) || (state?.playWhenReady == true))
+        let willPlay = !currentlyPlaying
+
+        if isRouted {
+            if willPlay {
+                player?.play()
+                isLocalPlaying = true
+                sendAction("play", params: ["positionMs": Int64(currentPositionSec * 1000)])
+            } else {
+                player?.pause()
+                isLocalPlaying = false
+                sendAction("pause", params: ["positionMs": Int64(currentPositionSec * 1000)])
+            }
         } else {
-            player?.play()
-            isLocalPlaying = true
-            sendCommand("play")
+            // Android is playing sound locally: directly send play or pause action to Android host
+            sendAction(willPlay ? "play" : "pause")
         }
     }
 
     public func nextTrack() {
-        sendCommand("next")
+        sendAction("next")
     }
 
     public func previousTrack() {
-        sendCommand("previous")
+        sendAction("prev")
     }
 
     public func seekTo(positionMs: Int64, notifyHost: Bool = true) {
@@ -382,35 +425,44 @@ public class PlaybackService: NSObject, ObservableObject {
             self?.isSeekingLocally = false
         }
         if notifyHost {
-            sendSeekCommand(positionMs: positionMs)
+            sendAction("seek", params: ["positionMs": positionMs])
         }
     }
 
     public func playQueueIndex(_ index: Int) {
-        sendCommand("play-index", param: "\(index)")
+        sendAction("playQueueIndex", params: ["index": index])
     }
 
-    // MARK: - API Commands to Android BitChord Server
-    private func sendCommand(_ action: String, param: String? = nil) {
-        var urlStr = "\(baseUrl)/api/control?action=\(action)&cid=ios_carplay"
-        if let p = param {
-            urlStr += "&param=\(p)"
+    // MARK: - API Action to Android Host (POST /api/action)
+    public func sendAction(_ type: String, params: [String: Any]? = nil) {
+        guard let url = URL(string: "\(baseUrl)/api/action") else { return }
+        var payload: [String: Any] = [
+            "type": type,
+            "cid": "ios_carplay"
+        ]
+        if let p = params {
+            for (k, v) in p {
+                payload[k] = v
+            }
         }
-        guard let url = URL(string: urlStr) else { return }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        URLSession.shared.dataTask(with: req).resume()
-    }
 
-    private func sendSeekCommand(positionMs: Int64) {
-        let urlStr = "\(baseUrl)/api/seek?positionMs=\(positionMs)&cid=ios_carplay"
-        guard let url = URL(string: urlStr) else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
         URLSession.shared.dataTask(with: req).resume()
+
+        // Also hit /api/control as backup for maximum compatibility
+        if let controlUrl = URL(string: "\(baseUrl)/api/control?action=\(type)&cid=ios_carplay") {
+            var cReq = URLRequest(url: controlUrl)
+            cReq.httpMethod = "POST"
+            URLSession.shared.dataTask(with: cReq).resume()
+        }
     }
 
     private func reportPlaybackToHost(ended: Bool = false) {
+        // Only report clock if iPhone is the active routed audio speaker!
+        guard state?.activeOnIphone == true else { return }
         guard let mediaId = currentLoadedMediaId,
               let url = URL(string: "\(baseUrl)/api/report?cid=ios_carplay") else { return }
         let payload: [String: Any] = [
@@ -470,9 +522,12 @@ public class PlaybackService: NSObject, ObservableObject {
                 info[MPMediaItemPropertyAlbumTitle] = alb
             }
         }
+        let isRouted = state?.activeOnIphone == true
+        let isPlaying = isRouted ? isLocalPlaying : ((state?.isPlaying == true) || (state?.playWhenReady == true))
+
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentPositionSec
         info[MPMediaItemPropertyPlaybackDuration] = durationSec
-        info[MPNowPlayingInfoPropertyPlaybackRate] = isLocalPlaying ? 1.0 : 0.0
+        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
 
         if let thumbUrlStr = state?.thumbnailUrl, let url = URL(string: "\(baseUrl)/api/artwork?url=\(thumbUrlStr.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = info

@@ -1,6 +1,7 @@
 import Foundation
 
 public struct BitChordState: Codable {
+    public var activeOnIphone: Boolean?
     public var mediaId: String?
     public var title: String
     public var artist: String
@@ -18,6 +19,7 @@ public struct BitChordState: Codable {
     public var currentIndex: Int?
 
     enum CodingKeys: String, CodingKey {
+        case activeOnIphone
         case mediaId
         case title
         case artist

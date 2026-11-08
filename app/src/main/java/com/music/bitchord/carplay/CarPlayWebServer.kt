@@ -556,6 +556,19 @@ object CarPlayWebServer {
                     handleAction(bodyText)
                     writeResponse(out, "200 OK", "application/json; charset=utf-8", """{"ok":true}""".toByteArray())
                 }
+                path == "/api/control" -> {
+                    val action = queryParams["action"].orEmpty().ifBlank { queryParams["type"].orEmpty() }
+                    val param = queryParams["param"].orEmpty()
+                    val payload = JSONObject().apply {
+                        put("type", action)
+                        put("param", param)
+                        if (action == "play-index" || action == "playQueueIndex") {
+                            put("index", param.toIntOrNull() ?: -1)
+                        }
+                    }
+                    handleAction(payload.toString())
+                    writeResponse(out, "200 OK", "application/json; charset=utf-8", """{"ok":true}""".toByteArray())
+                }
                 path == "/api/search" -> {
                     val q = queryParams["q"].orEmpty().trim()
                     val json = handleSearch(q)
@@ -948,7 +961,12 @@ object CarPlayWebServer {
                             val pos = json.optLong("positionMs", -1L).takeIf { it >= 0L }
                             speaker.onClientDirectTransport(play = true, currentPositionMs = pos)
                         } else {
-                            controller?.onTogglePlay()
+                            val player = CarPlayWebBridge.localPlayerProvider?.invoke()
+                            if (player != null) {
+                                if (!player.playWhenReady) player.play()
+                            } else {
+                                controller?.onTogglePlay()
+                            }
                         }
                     }
                     "pause" -> {
@@ -956,7 +974,12 @@ object CarPlayWebServer {
                             val pos = json.optLong("positionMs", -1L).takeIf { it >= 0L }
                             speaker.onClientDirectTransport(play = false, currentPositionMs = pos)
                         } else {
-                            controller?.onTogglePlay()
+                            val player = CarPlayWebBridge.localPlayerProvider?.invoke()
+                            if (player != null) {
+                                if (player.playWhenReady) player.pause()
+                            } else {
+                                controller?.onTogglePlay()
+                            }
                         }
                     }
                     "togglePlay" -> {
@@ -965,7 +988,7 @@ object CarPlayWebServer {
                     "next" -> {
                         controller?.onNext()
                     }
-                    "prev" -> {
+                    "prev", "previous" -> {
                         controller?.onPrevious()
                     }
                     "seek" -> {
@@ -975,8 +998,8 @@ object CarPlayWebServer {
                             controller?.onSeekTo(pos)
                         }
                     }
-                    "playQueueIndex" -> {
-                        val idx = json.optInt("index", -1)
+                    "playQueueIndex", "play-index" -> {
+                        val idx = json.optInt("index", json.optString("param", "-1").toIntOrNull() ?: -1)
                         if (idx >= 0) controller?.onPlayQueueIndex(idx)
                     }
                     "playSong" -> {
