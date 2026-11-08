@@ -63,6 +63,9 @@ public class PlaybackService: NSObject, ObservableObject {
     private var lastAppliedSeekSeq: Int64 = 0
     private var isSeekingLocally: Bool = false
     private var disconnectCount: Int = 0
+    private var cachedArtworkUrl: String? = nil
+    private var cachedArtwork: MPMediaItemArtwork? = nil
+    private var isDownloadingArtwork: Bool = false
 
     public var baseUrl: String {
         let host = serverHost.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -610,20 +613,43 @@ public class PlaybackService: NSObject, ObservableObject {
         info[MPMediaItemPropertyPlaybackDuration] = durationSec
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
 
-        if let thumbUrlStr = state?.thumbnailUrl, let url = URL(string: "\(baseUrl)/api/artwork?url=\(thumbUrlStr.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") {
+        let thumbUrlStr = state?.thumbnailUrl
+
+        // If artwork is already cached for this thumbnail URL, use it directly without re-fetching
+        if let artwork = cachedArtwork, thumbUrlStr == cachedArtworkUrl {
+            info[MPMediaItemPropertyArtwork] = artwork
             MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-            URLSession.shared.dataTask(with: url) { data, _, _ in
-                if let data = data, let image = UIImage(data: data) {
-                    var updated = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
-                    let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                    updated[MPMediaItemPropertyArtwork] = artwork
-                    DispatchQueue.main.async {
-                        MPNowPlayingInfoCenter.default().nowPlayingInfo = updated
-                    }
-                }
-            }.resume()
-        } else {
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+            return
         }
+
+        // Keep current artwork attached to info while loading the new one to avoid visual flicker
+        if let artwork = cachedArtwork {
+            info[MPMediaItemPropertyArtwork] = artwork
+        }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+
+        guard let thumb = thumbUrlStr, !thumb.isEmpty, thumb != cachedArtworkUrl, !isDownloadingArtwork else {
+            return
+        }
+
+        guard let url = URL(string: "\(baseUrl)/api/artwork?url=\(thumb.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") else {
+            return
+        }
+
+        isDownloadingArtwork = true
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let self = self else { return }
+            self.isDownloadingArtwork = false
+            if let data = data, let image = UIImage(data: data) {
+                let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                DispatchQueue.main.async {
+                    self.cachedArtworkUrl = thumb
+                    self.cachedArtwork = artwork
+                    var updated = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+                    updated[MPMediaItemPropertyArtwork] = artwork
+                    MPNowPlayingInfoCenter.default().nowPlayingInfo = updated
+                }
+            }
+        }.resume()
     }
 }
