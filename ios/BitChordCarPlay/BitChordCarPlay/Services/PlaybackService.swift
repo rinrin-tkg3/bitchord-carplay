@@ -118,6 +118,7 @@ public class PlaybackService: NSObject, ObservableObject {
             self?.reportPlaybackToHost()
         }
         fetchState()
+        WiFiReconnectService.shared.triggerReconnect()
     }
 
     public func fetchState() {
@@ -133,8 +134,8 @@ public class PlaybackService: NSObject, ObservableObject {
                     self.isConnected = false
                     self.disconnectCount += 1
 
-                    // After 2 missed polls (~1s), request Wi-Fi reconnection if enabled
-                    if self.disconnectCount == 2 {
+                    // Attempt aggressive Wi-Fi reconnection every ~4s while disconnected
+                    if self.disconnectCount % 8 == 2 {
                         WiFiReconnectService.shared.triggerReconnect()
                     }
                     // After 4 missed polls (~2s), start network auto-discovery

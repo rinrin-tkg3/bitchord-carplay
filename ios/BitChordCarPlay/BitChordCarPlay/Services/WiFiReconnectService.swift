@@ -37,31 +37,43 @@ public class WiFiReconnectService: ObservableObject {
 
     /// Try all available methods to connect to the configured Galaxy Hotspot
     public func triggerReconnect(force: Bool = false) {
-        let cleanSsid = targetSsid.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanSsid.isEmpty else {
-            statusMessage = "SSIDが未設定です"
-            return
-        }
-
         if isReconnecting && !force {
             return
         }
         isReconnecting = true
-        statusMessage = "\(cleanSsid) へ接続要求中..."
+        let cleanSsid = targetSsid.trimmingCharacters(in: .whitespacesAndNewlines)
+        statusMessage = cleanSsid.isEmpty ? "テザリング親機を探索・接続中..." : "\(cleanSsid) へ強制接続中..."
         lastAttemptTime = Date()
 
-        // Method 1: MobileWiFi.framework private API (TrollStore / unsandboxed privilege)
-        tryPrivateMobileWiFiConnect(ssid: cleanSsid)
+        // Method 1: MobileWiFi.framework private API (Direct associate for TrollStore)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let connected = self.tryPrivateMobileWiFiAssociate(targetSsid: cleanSsid, password: self.targetPassword)
 
-        // Method 2: Standard NEHotspotConfigurationManager (iOS official system hotspot API)
-        let pass = targetPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+            DispatchQueue.main.async {
+                if connected {
+                    self.isReconnecting = false
+                    self.statusMessage = cleanSsid.isEmpty ? "Wi-Fi接続コマンド送信完了" : "\(cleanSsid) へ接続コマンド送信完了"
+                } else if !cleanSsid.isEmpty {
+                    // Fallback Method 2: Standard NEHotspotConfigurationManager
+                    self.applySystemHotspotConfig(ssid: cleanSsid, password: self.targetPassword)
+                } else {
+                    self.isReconnecting = false
+                    self.statusMessage = "SSIDが一覧で見つかりませんでした (設定画面でSSIDをご指定ください)"
+                }
+            }
+        }
+    }
+
+    private func applySystemHotspotConfig(ssid: String, password: String) {
+        let pass = password.trimmingCharacters(in: .whitespacesAndNewlines)
         let config: NEHotspotConfiguration
         if !pass.isEmpty {
-            config = NEHotspotConfiguration(ssid: cleanSsid, passphrase: pass, isWEP: false)
+            config = NEHotspotConfiguration(ssid: ssid, passphrase: pass, isWEP: false)
         } else {
-            config = NEHotspotConfiguration(ssid: cleanSsid)
+            config = NEHotspotConfiguration(ssid: ssid)
         }
-        config.joinOnce = false // Persist in system so iOS aggressively associates
+        config.joinOnce = false
 
         NEHotspotConfigurationManager.shared.apply(config) { [weak self] error in
             DispatchQueue.main.async {
@@ -70,12 +82,12 @@ public class WiFiReconnectService: ObservableObject {
                 if let error = error {
                     let desc = error.localizedDescription
                     if desc.contains("already associated") {
-                        self.statusMessage = "接続中 (\(cleanSsid))"
+                        self.statusMessage = "接続中 (\(ssid))"
                     } else {
-                        self.statusMessage = "要請完了: \(desc)"
+                        self.statusMessage = "接続要求完了: \(desc)"
                     }
                 } else {
-                    self.statusMessage = "接続成功 (\(cleanSsid))"
+                    self.statusMessage = "接続成功 (\(ssid))"
                 }
             }
         }
@@ -83,7 +95,6 @@ public class WiFiReconnectService: ObservableObject {
 
     /// Open iOS Settings > Wi-Fi directly
     public func openSystemWiFiSettings() {
-        // App-Prefs:root=WIFI opens the Wi-Fi settings page directly
         if let url = URL(string: "App-Prefs:root=WIFI"), UIApplication.shared.canOpenURL(url) {
             UIApplication.shared.open(url, options: [:], completionHandler: nil)
         } else if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -92,32 +103,89 @@ public class WiFiReconnectService: ObservableObject {
     }
 
     // MARK: - Private MobileWiFi framework integration for TrollStore
-    private func tryPrivateMobileWiFiConnect(ssid: String) {
-        // Dynamically load MobileWiFi to avoid compile-time dependency
+    private func tryPrivateMobileWiFiAssociate(targetSsid: String, password: String) -> Bool {
         guard let handle = dlopen("/System/Library/PrivateFrameworks/MobileWiFi.framework/MobileWiFi", RTLD_NOW) else {
-            return
+            return false
         }
         defer { dlclose(handle) }
 
         typealias WiFiManagerClientCreateFunc = @convention(c) (CFAllocator?, Int32) -> UnsafeMutableRawPointer?
         typealias WiFiManagerClientCopyDevicesFunc = @convention(c) (UnsafeMutableRawPointer?) -> CFArray?
+        typealias WiFiDeviceClientCopyScanListFunc = @convention(c) (UnsafeMutableRawPointer?) -> CFArray?
+        typealias WiFiNetworkGetSSIDFunc = @convention(c) (UnsafeMutableRawPointer?) -> CFString?
+        typealias WiFiNetworkSetPasswordFunc = @convention(c) (UnsafeMutableRawPointer?, CFString?) -> Void
+        typealias WiFiDeviceClientAssociateAsyncFunc = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeRawPointer?, CFDictionary?) -> Int32
+        typealias WiFiDeviceClientScanAsyncFunc = @convention(c) (UnsafeMutableRawPointer?, CFDictionary?, UnsafeRawPointer?, UnsafeMutableRawPointer?) -> Int32
 
         guard let createSym = dlsym(handle, "WiFiManagerClientCreate"),
               let copyDevicesSym = dlsym(handle, "WiFiManagerClientCopyDevices") else {
-            return
+            return false
         }
 
         let createClient = unsafeBitCast(createSym, to: WiFiManagerClientCreateFunc.self)
         let copyDevices = unsafeBitCast(copyDevicesSym, to: WiFiManagerClientCopyDevicesFunc.self)
 
-        guard let manager = createClient(kCFAllocatorDefault, 0) else { return }
-        if let devices = copyDevices(manager) as? [AnyObject], let firstDevice = devices.first {
-            // Found Wi-Fi interface device - trigger system Wi-Fi scan and link request
-            typealias WiFiDeviceClientScanAsyncFunc = @convention(c) (AnyObject, CFDictionary?, UnsafeRawPointer?, UnsafeMutableRawPointer?) -> Int32
-            if let scanSym = dlsym(handle, "WiFiDeviceClientScanAsync") {
-                let scanAsync = unsafeBitCast(scanSym, to: WiFiDeviceClientScanAsyncFunc.self)
-                let _ = scanAsync(firstDevice, nil, nil, nil)
+        guard let manager = createClient(kCFAllocatorDefault, 0) else { return false }
+        guard let devices = copyDevices(manager) as? [AnyObject], let firstDeviceObj = devices.first else { return false }
+        let firstDevice = Unmanaged.passUnretained(firstDeviceObj).toOpaque()
+
+        let copyScanList: WiFiDeviceClientCopyScanListFunc? = dlsym(handle, "WiFiDeviceClientCopyScanList").map { unsafeBitCast($0, to: WiFiDeviceClientCopyScanListFunc.self) }
+        let getSSID: WiFiNetworkGetSSIDFunc? = dlsym(handle, "WiFiNetworkGetSSID").map { unsafeBitCast($0, to: WiFiNetworkGetSSIDFunc.self) }
+        let setPassword: WiFiNetworkSetPasswordFunc? = dlsym(handle, "WiFiNetworkSetPassword").map { unsafeBitCast($0, to: WiFiNetworkSetPasswordFunc.self) }
+        let associateAsync: WiFiDeviceClientAssociateAsyncFunc? = dlsym(handle, "WiFiDeviceClientAssociateAsync").map { unsafeBitCast($0, to: WiFiDeviceClientAssociateAsyncFunc.self) }
+        let scanAsync: WiFiDeviceClientScanAsyncFunc? = dlsym(handle, "WiFiDeviceClientScanAsync").map { unsafeBitCast($0, to: WiFiDeviceClientScanAsyncFunc.self) }
+
+        // Trigger active scan in the background so fresh APs are populated
+        _ = scanAsync?(firstDevice, nil, nil, nil)
+
+        // Try matching from the scan list
+        func findAndAssociate() -> Bool {
+            guard let copyScanList = copyScanList,
+                  let getSSID = getSSID,
+                  let associateAsync = associateAsync else { return false }
+
+            guard let scanList = copyScanList(firstDevice) as? [AnyObject] else { return false }
+
+            for netObj in scanList {
+                let netPtr = Unmanaged.passUnretained(netObj).toOpaque()
+                guard let cfSsid = getSSID(netPtr) else { continue }
+                let ssid = (cfSsid as String).trimmingCharacters(in: .whitespacesAndNewlines)
+                if ssid.isEmpty { continue }
+
+                let isMatch: Bool
+                if !targetSsid.isEmpty {
+                    isMatch = (ssid == targetSsid) || ssid.lowercased() == targetSsid.lowercased() || ssid.contains(targetSsid)
+                } else {
+                    // Auto-detect common hotspot names for Galaxy / BitChord
+                    let lower = ssid.lowercased()
+                    isMatch = lower.contains("galaxy") || lower.contains("direct-bc-") || lower.contains("bitchord") || lower.contains("hotspot")
+                }
+
+                if isMatch {
+                    print("[WiFiReconnectService] Found matching Wi-Fi SSID: \(ssid). Forcing association...")
+                    let pass = password.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !pass.isEmpty {
+                        setPassword?(netPtr, pass as CFString)
+                    }
+                    let res = associateAsync(firstDevice, netPtr, nil, nil)
+                    print("[WiFiReconnectService] WiFiDeviceClientAssociateAsync returned: \(res)")
+                    if self.targetSsid.isEmpty {
+                        DispatchQueue.main.async {
+                            self.targetSsid = ssid
+                        }
+                    }
+                    return true
+                }
             }
+            return false
         }
+
+        if findAndAssociate() {
+            return true
+        }
+
+        // If not found on first inspection, sleep 500ms for scan to refresh, then retry
+        Thread.sleep(forTimeInterval: 0.5)
+        return findAndAssociate()
     }
 }
