@@ -1055,7 +1055,7 @@ internal class CarPlayWebSpeaker(
     override val playWhenReady: Boolean get() = wantsPlay
 
     override val isPlaying: Boolean
-        get() = active && !loading && (status?.isPlaying == true || wantsPlay)
+        get() = active && wantsPlay && !loading && !finished && (status?.isPlaying == true || (SystemClock.elapsedRealtime() - requestedAt < 1500L))
 
     override val playbackState: Int
         get() = when {
@@ -1171,21 +1171,27 @@ internal class CarPlayWebSpeaker(
         }
         wantsPlay = true
         finished = false
+        requestedAt = SystemClock.elapsedRealtime()
         commandSeq++
         sink?.onRemotePlaybackChanged()
         onChanged()
+        CarPlayWebBridge.updatePlaybackSnapshot()
     }
 
     override fun pause() {
         if (!active) return
         wantsPlay = false
+        status = status?.let {
+            ClientStatus(it.mediaId, false, false, it.positionMs, it.durationMs, it.volume, SystemClock.elapsedRealtime())
+        }
         if (status != null) {
             requestedPositionMs = positionMs
-            requestedAt = SystemClock.elapsedRealtime()
+            requestedAt = 0L
         }
         commandSeq++
         sink?.onRemotePlaybackChanged()
         onChanged()
+        CarPlayWebBridge.updatePlaybackSnapshot()
     }
 
     override fun seekTo(positionMs: Long) {
@@ -1321,9 +1327,12 @@ internal class CarPlayWebSpeaker(
                 effectivePos
             }
 
+            // If host has explicitly paused, reject late/stale playing=true reports from client
+            val effectivePlaying = if (!wantsPlay) false else playing
+
             status = ClientStatus(
                 mediaId = mediaId,
-                isPlaying = playing,
+                isPlaying = effectivePlaying,
                 buffering = buffering,
                 positionMs = if (authDurMs > 0L) anchoredPos.coerceAtMost(authDurMs) else anchoredPos,
                 durationMs = authDurMs,
@@ -1331,7 +1340,7 @@ internal class CarPlayWebSpeaker(
                 at = now,
             )
             val reachedAuthoritativeEnd = !graceActive &&
-                playing &&
+                effectivePlaying &&
                 authDurMs > 5_000L &&
                 rawEffectivePos >= authDurMs - 550L
             if (ended || reachedAuthoritativeEnd) {
@@ -1344,7 +1353,7 @@ internal class CarPlayWebSpeaker(
             val stateChanged = prev == null ||
                 wasLoading ||
                 prev.mediaId != mediaId ||
-                prev.isPlaying != playing ||
+                prev.isPlaying != effectivePlaying ||
                 prev.buffering != buffering ||
                 prev.durationMs != authDurMs ||
                 ended ||
@@ -1353,6 +1362,7 @@ internal class CarPlayWebSpeaker(
             if (stateChanged) {
                 sink?.onRemotePlaybackChanged()
                 onChanged()
+                CarPlayWebBridge.updatePlaybackSnapshot()
             }
         }
     }
@@ -1362,14 +1372,22 @@ internal class CarPlayWebSpeaker(
             start()
         }
         wantsPlay = play
+        if (!play) {
+            status = status?.let {
+                ClientStatus(it.mediaId, false, false, currentPositionMs ?: it.positionMs, it.durationMs, it.volume, SystemClock.elapsedRealtime())
+            }
+            requestedAt = 0L
+        } else {
+            requestedAt = SystemClock.elapsedRealtime()
+        }
         if (currentPositionMs != null && currentPositionMs >= 0L) {
             requestedPositionMs = currentPositionMs
             wantedSeekMs = currentPositionMs
-            requestedAt = SystemClock.elapsedRealtime()
         }
         commandSeq++
         sink?.onRemotePlaybackChanged()
         onChanged()
+        CarPlayWebBridge.updatePlaybackSnapshot()
     }
 
     private fun onClientTrackEnded() {

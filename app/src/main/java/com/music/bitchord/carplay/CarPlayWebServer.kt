@@ -963,10 +963,11 @@ object CarPlayWebServer {
                         } else {
                             val player = CarPlayWebBridge.localPlayerProvider?.invoke()
                             if (player != null) {
-                                if (!player.playWhenReady) player.play()
+                                player.play()
                             } else {
                                 controller?.onTogglePlay()
                             }
+                            CarPlayWebBridge.updatePlaybackSnapshot()
                         }
                     }
                     "pause" -> {
@@ -976,10 +977,11 @@ object CarPlayWebServer {
                         } else {
                             val player = CarPlayWebBridge.localPlayerProvider?.invoke()
                             if (player != null) {
-                                if (player.playWhenReady) player.pause()
+                                player.pause()
                             } else {
                                 controller?.onTogglePlay()
                             }
+                            CarPlayWebBridge.updatePlaybackSnapshot()
                         }
                     }
                     "togglePlay" -> {

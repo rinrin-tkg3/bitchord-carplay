@@ -15,6 +15,10 @@ public class PlaybackService: NSObject, ObservableObject {
     @Published public var isLocalPlaying: Bool = false
     @Published public var queue: [QueueSongItem] = []
 
+    // User Intent & Optimistic Transport Lock (prevents ping-pong oscillation)
+    @Published public var userWantsPlay: Bool = false
+    @Published public var lastUserActionTime: Date = Date.distantPast
+
     // CarPlay connection state and simulation mode
     @Published public var isCarPlayConnected: Bool = false {
         didSet {
@@ -165,7 +169,21 @@ public class PlaybackService: NSObject, ObservableObject {
         }
 
         let isRoutedToIphone = newState.activeOnIphone == true
-        let hostWantsPlay = (newState.playWhenReady == true) || (newState.isPlaying == true)
+
+        // User intent grace period: If user recently tapped play/pause (< 1.5s ago),
+        // prioritize user's immediate intent over network poll to prevent ping-pong oscillation
+        let inGracePeriod = Date().timeIntervalSince(self.lastUserActionTime) < 1.5
+        let effectiveWantsPlay: Bool
+        if inGracePeriod {
+            effectiveWantsPlay = self.userWantsPlay
+        } else {
+            // Android MediaSession's playWhenReady is the authoritative intent
+            if let pwr = newState.playWhenReady {
+                effectiveWantsPlay = pwr
+            } else {
+                effectiveWantsPlay = newState.isPlaying ?? false
+            }
+        }
 
         // Track changed
         if prev?.mediaId != newState.mediaId, let newId = newState.mediaId {
@@ -186,11 +204,11 @@ public class PlaybackService: NSObject, ObservableObject {
         }
 
         // Strict Mutual Exclusion for Sound Output:
-        // Sound is ONLY emitted on iPhone if:
+        // Sound is emitted on iPhone ONLY IF:
         // 1. Android host has routed audio to iPhone (activeOnIphone == true)
-        // 2. AND host wants playback (isPlaying == true or playWhenReady == true)
+        // 2. AND effectiveWantsPlay == true
         // 3. AND device is effectively connected to CarPlay (or debug simulation)
-        if isRoutedToIphone && hostWantsPlay && isEffectivelyCarPlayConnected {
+        if isRoutedToIphone && effectiveWantsPlay && isEffectivelyCarPlayConnected {
             if player?.timeControlStatus != .playing {
                 player?.play()
                 isLocalPlaying = true
@@ -292,7 +310,10 @@ public class PlaybackService: NSObject, ObservableObject {
         }
 
         let isRoutedToIphone = state?.activeOnIphone == true
-        if isRoutedToIphone && isEffectivelyCarPlayConnected {
+        let inGracePeriod = Date().timeIntervalSince(self.lastUserActionTime) < 1.5
+        let wantsPlay = inGracePeriod ? self.userWantsPlay : ((state?.playWhenReady == true) || (state?.isPlaying == true))
+
+        if isRoutedToIphone && wantsPlay && isEffectivelyCarPlayConnected {
             player?.play()
             isLocalPlaying = true
         } else {
@@ -389,8 +410,17 @@ public class PlaybackService: NSObject, ObservableObject {
         }
 
         let isRouted = state?.activeOnIphone == true
-        let currentlyPlaying = isRouted ? isLocalPlaying : ((state?.isPlaying == true) || (state?.playWhenReady == true))
+        let currentlyPlaying: Bool
+        if isRouted {
+            currentlyPlaying = isLocalPlaying
+        } else {
+            currentlyPlaying = (state?.playWhenReady == true) || (state?.isPlaying == true)
+        }
         let willPlay = !currentlyPlaying
+
+        // Record immediate user intent to lock out conflicting network responses
+        self.userWantsPlay = willPlay
+        self.lastUserActionTime = Date()
 
         if isRouted {
             if willPlay {
@@ -402,6 +432,8 @@ public class PlaybackService: NSObject, ObservableObject {
                 isLocalPlaying = false
                 sendAction("pause", params: ["positionMs": Int64(currentPositionSec * 1000)])
             }
+            // Immediately report to host to flush state without waiting for 0.5s timer
+            reportPlaybackToHost()
         } else {
             // Android is playing sound locally: directly send play or pause action to Android host
             sendAction(willPlay ? "play" : "pause")
@@ -409,10 +441,12 @@ public class PlaybackService: NSObject, ObservableObject {
     }
 
     public func nextTrack() {
+        self.lastUserActionTime = Date()
         sendAction("next")
     }
 
     public func previousTrack() {
+        self.lastUserActionTime = Date()
         sendAction("prev")
     }
 
@@ -430,6 +464,7 @@ public class PlaybackService: NSObject, ObservableObject {
     }
 
     public func playQueueIndex(_ index: Int) {
+        self.lastUserActionTime = Date()
         sendAction("playQueueIndex", params: ["index": index])
     }
 
@@ -460,7 +495,7 @@ public class PlaybackService: NSObject, ObservableObject {
         }
     }
 
-    private func reportPlaybackToHost(ended: Bool = false) {
+    public func reportPlaybackToHost(ended: Bool = false) {
         // Only report clock if iPhone is the active routed audio speaker!
         guard state?.activeOnIphone == true else { return }
         guard let mediaId = currentLoadedMediaId,

@@ -11,8 +11,15 @@ public struct NowPlayingView: View {
     public init() {}
 
     private var isCurrentlyPlaying: Bool {
+        if Date().timeIntervalSince(playback.lastUserActionTime) < 1.5 {
+            return playback.userWantsPlay
+        }
         let isRouted = playback.state?.activeOnIphone == true
-        return isRouted ? playback.isLocalPlaying : ((playback.state?.isPlaying == true) || (playback.state?.playWhenReady == true))
+        if isRouted {
+            return playback.isLocalPlaying
+        } else {
+            return (playback.state?.playWhenReady == true) || (playback.state?.isPlaying == true)
+        }
     }
 
     public var body: some View {
