@@ -201,6 +201,7 @@ fun SettingsScreen(
     onSources: () -> Unit,
     onListenTogether: () -> Unit,
     onWearOs: () -> Unit,
+    onCarPlay: () -> Unit = {},
     onSpotifyCanvasAuth: () -> Unit,
     onAppLanguage: () -> Unit,
     onEditSignatureApi: () -> Unit,
@@ -258,6 +259,8 @@ fun SettingsScreen(
     val fullBleedDetailArtwork by AppSettings.fullBleedDetailArtwork.collectAsStateWithLifecycle()
     val playerTheme by AppSettings.playerTheme.collectAsStateWithLifecycle()
     val syncedLyrics by AppSettings.syncedLyrics.collectAsStateWithLifecycle()
+    val keepLyricsControlsVisible by AppSettings.keepLyricsControlsVisible.collectAsStateWithLifecycle()
+    val openPlayerOnHomeSongTap by AppSettings.openPlayerOnHomeSongTap.collectAsStateWithLifecycle()
     val lyricsSources by AppSettings.lyricsSources.collectAsStateWithLifecycle()
     val translationLanguage by AppSettings.translationLanguage.collectAsStateWithLifecycle()
     val theme by AppSettings.themeMode.collectAsStateWithLifecycle()
@@ -342,6 +345,8 @@ fun SettingsScreen(
     // result reports itself under the word "Export".
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var importStatus by remember { mutableStateOf<String?>(null) }
+    var settingsExportStatus by remember { mutableStateOf<String?>(null) }
+    var settingsImportStatus by remember { mutableStateOf<String?>(null) }
     var confirmImport by remember { mutableStateOf(false) }
     var confirmClearSongCache by remember { mutableStateOf(false) }
     var showPerformanceWarning by remember { mutableStateOf(false) }
@@ -399,6 +404,37 @@ fun SettingsScreen(
                 },
                 onFailure = {
                     context.getString(R.string.import_failed, it.message ?: context.getString(R.string.unknown_error))
+                },
+            )
+        }
+    }
+    val settingsExportPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { target ->
+        if (target == null) return@rememberLauncherForActivityResult
+        backupScope.launch {
+            settingsExportStatus = Backup.exportSettingsTo(context, target).fold(
+                onSuccess = { count ->
+                    "設定をエクスポートしました（${count}項目）"
+                },
+                onFailure = {
+                    "エクスポート失敗: ${it.message ?: context.getString(R.string.unknown_error)}"
+                },
+            )
+        }
+    }
+    val settingsImportPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { source ->
+        if (source == null) return@rememberLauncherForActivityResult
+        backupScope.launch {
+            settingsImportStatus = Backup.importSettingsFrom(context, source).fold(
+                onSuccess = { count ->
+                    Toast.makeText(context, "設定をインポートしました（${count}項目）", Toast.LENGTH_SHORT).show()
+                    "設定をインポートしました（${count}項目）"
+                },
+                onFailure = {
+                    "インポート失敗: ${it.message ?: context.getString(R.string.unknown_error)}"
                 },
             )
         }
@@ -495,6 +531,15 @@ fun SettingsScreen(
                         } ?: stringResource(R.string.listen_together_subtitle),
                         badge = party.members.size.takeIf { party.inParty && it > 1 }?.toString(),
                         onClick = onListenTogether,
+                    )
+                }
+                val carPlayTitle = "CarPlay / iPhone 連携"
+                row(carPlayTitle, "carplay", "iphone", "tethering", "bluetooth", "テザリング", "車", "同期") {
+                    SettingsRow(
+                        icon = SfIcons.Radio,
+                        title = carPlayTitle,
+                        subtitle = "テザリング経由でiPhone 7から音楽再生＆双方向操作",
+                        onClick = onCarPlay,
                     )
                 }
             }
@@ -597,6 +642,26 @@ fun SettingsScreen(
                     SettingsGroup {
                         WearOsSettingsRow(onClick = onWearOs)
                     }
+                }
+                SettingsGroup(header = "設定のバックアップ") {
+                    SettingsRow(
+                        icon = SfIcons.FileUpload,
+                        title = "設定をエクスポート",
+                        subtitle = settingsExportStatus ?: "現在の設定をJSONファイルに保存します",
+                        onClick = { settingsExportPicker.launch(Backup.suggestedSettingsName()) },
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = TEXT_INSET),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                    )
+                    SettingsRow(
+                        icon = SfIcons.FileDownload,
+                        title = "設定をインポート",
+                        subtitle = settingsImportStatus ?: "保存したJSONファイルから設定を復元します",
+                        onClick = {
+                            settingsImportPicker.launch(arrayOf("application/json", "text/plain", "*/*"))
+                        },
+                    )
                 }
             }
         }
@@ -1275,6 +1340,21 @@ fun SettingsScreen(
             // sources are third-party services being reached on the user's
             // connection — which is the part worth being able to narrow.
             if (syncedLyrics) {
+                val keepLyricsControlsTitle = "歌詞表示中にコントロールを隠さない"
+                row(keepLyricsControlsTitle, "lyrics", "controls", "歌詞", "コントロール", "ボタン", "player") {
+                    SettingsRow(
+                        icon = SfIcons.LyricsControlsPinned,
+                        title = keepLyricsControlsTitle,
+                        subtitle = "歌詞を表示しているときも再生ボタンやシークバーを常に表示します",
+                        trailing = {
+                            IosSwitch(
+                                checked = keepLyricsControlsVisible,
+                                onCheckedChange = AppSettings::setKeepLyricsControlsVisible,
+                            )
+                        },
+                        onClick = { AppSettings.setKeepLyricsControlsVisible(!keepLyricsControlsVisible) },
+                    )
+                }
                 val lyricsBlurTitle = stringResource(R.string.blur_unfocused_lyrics)
                 row(lyricsBlurTitle, "lyrics", "blur") {
                     SettingsRow(
@@ -1320,6 +1400,21 @@ fun SettingsScreen(
                         onClick = onTranslationLanguage,
                     )
                 }
+            }
+            val openPlayerOnHomeTapTitle = "ホームで曲をタップしたときにプレーヤーを開く"
+            row(openPlayerOnHomeTapTitle, "home", "player", "ホーム", "再生", "プレーヤー", "tap") {
+                SettingsRow(
+                    icon = SfIcons.Fullscreen,
+                    title = openPlayerOnHomeTapTitle,
+                    subtitle = "ホーム画面の曲をタップしたときにすぐ再生画面（フルプレーヤー）へ移行します",
+                    trailing = {
+                        IosSwitch(
+                            checked = openPlayerOnHomeSongTap,
+                            onCheckedChange = AppSettings::setOpenPlayerOnHomeSongTap,
+                        )
+                    },
+                    onClick = { AppSettings.setOpenPlayerOnHomeSongTap(!openPlayerOnHomeSongTap) },
+                )
             }
         }
 
@@ -1525,6 +1620,26 @@ fun SettingsScreen(
                     onClick = { AppSettings.setReplayGenres(!replayGenres) },
                 )
             }
+            val exportSettingsTitle = "設定をエクスポート"
+            row(exportSettingsTitle, "settings", "backup", "export", "設定", "エクスポート") {
+                SettingsRow(
+                    icon = SfIcons.FileUpload,
+                    title = exportSettingsTitle,
+                    subtitle = settingsExportStatus ?: "現在の設定をJSONファイルに保存します",
+                    onClick = { settingsExportPicker.launch(Backup.suggestedSettingsName()) },
+                )
+            }
+            val importSettingsTitle = "設定をインポート"
+            row(importSettingsTitle, "settings", "backup", "restore", "import", "設定", "インポート") {
+                SettingsRow(
+                    icon = SfIcons.FileDownload,
+                    title = importSettingsTitle,
+                    subtitle = settingsImportStatus ?: "保存したJSONファイルから設定を復元します",
+                    onClick = {
+                        settingsImportPicker.launch(arrayOf("application/json", "text/plain", "*/*"))
+                    },
+                )
+            }
             val exportDataTitle = stringResource(R.string.export_data)
             row(exportDataTitle, "backup") {
                 SettingsRow(
@@ -1598,6 +1713,36 @@ fun SettingsScreen(
                 )
             }
             val hideVolumeBarTitle = stringResource(R.string.hide_volume_bar)
+            val keepLyricsControlsMiscTitle = "歌詞表示中にコントロールを隠さない"
+            row(keepLyricsControlsMiscTitle, "lyrics", "controls", "歌詞", "コントロール", "ボタン", "player") {
+                SettingsRow(
+                    icon = SfIcons.LyricsControlsPinned,
+                    title = keepLyricsControlsMiscTitle,
+                    subtitle = "歌詞を表示しているときも再生ボタンやシークバーを常に表示します",
+                    trailing = {
+                        IosSwitch(
+                            checked = keepLyricsControlsVisible,
+                            onCheckedChange = AppSettings::setKeepLyricsControlsVisible,
+                        )
+                    },
+                    onClick = { AppSettings.setKeepLyricsControlsVisible(!keepLyricsControlsVisible) },
+                )
+            }
+            val openPlayerOnHomeTapMiscTitle = "ホームで曲をタップしたときにプレーヤーを開く"
+            row(openPlayerOnHomeTapMiscTitle, "home", "player", "ホーム", "再生", "プレーヤー", "tap") {
+                SettingsRow(
+                    icon = SfIcons.Fullscreen,
+                    title = openPlayerOnHomeTapMiscTitle,
+                    subtitle = "ホーム画面の曲をタップしたときにすぐ再生画面（フルプレーヤー）へ移行します",
+                    trailing = {
+                        IosSwitch(
+                            checked = openPlayerOnHomeSongTap,
+                            onCheckedChange = AppSettings::setOpenPlayerOnHomeSongTap,
+                        )
+                    },
+                    onClick = { AppSettings.setOpenPlayerOnHomeSongTap(!openPlayerOnHomeSongTap) },
+                )
+            }
             row(hideVolumeBarTitle, "volume", "player") {
                 SettingsRow(
                     icon = SfIcons.VolumeOff,

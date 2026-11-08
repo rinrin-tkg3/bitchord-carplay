@@ -144,6 +144,7 @@ object YtMusicRepository {
                     browseId = null,
                 )
             },
+            layout = com.music.bitchord.data.model.ShelfLayout.LIST,
         )
     }
 

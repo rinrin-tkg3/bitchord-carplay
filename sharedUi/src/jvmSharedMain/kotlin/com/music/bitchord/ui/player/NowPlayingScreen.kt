@@ -1293,6 +1293,7 @@ fun NowPlayingScreen(
     )
 
     val volume = rememberPlayerVolume()
+    val keepLyricsControlsVisible by PlayerSettings.keepLyricsControlsVisible.collectAsStateWithLifecycle()
     // Present when you arrive, out of the way once you are actually reading.
     //
     // The panel opens with the player under it so the scrubber and transport
@@ -1304,8 +1305,10 @@ fun NowPlayingScreen(
     // Never while a finger is on the scrubber or the volume bar: those are the
     // two controls that are *being used* while nothing else on screen moves,
     // and timing out underneath them would take the thing away mid-gesture.
-    LaunchedEffect(lyricsOpen, lyricsControlsOpen, scrub.scrubbing, volume.dragging) {
-        if (lyricsOpen && lyricsControlsOpen && !scrub.scrubbing && !volume.dragging) {
+    LaunchedEffect(lyricsOpen, lyricsControlsOpen, scrub.scrubbing, volume.dragging, keepLyricsControlsVisible) {
+        if (keepLyricsControlsVisible) {
+            if (lyricsOpen && !lyricsControlsOpen) lyricsControlsOpen = true
+        } else if (lyricsOpen && lyricsControlsOpen && !scrub.scrubbing && !volume.dragging) {
             delay(LYRICS_CONTROLS_IDLE_MS)
             lyricsControlsOpen = false
         }
@@ -3865,9 +3868,9 @@ fun NowPlayingScreen(
                                         isPlaying = isPlaying && position.advancing,
                                         active = lyricsPanelVisible,
                                         onSeekToLine = seekToLyric,
-                                        controlsOpen = lyricsControlsOpen,
+                                        controlsOpen = lyricsControlsOpen || keepLyricsControlsVisible,
                                         onRevealControls = { lyricsControlsOpen = true },
-                                        onHideControls = { lyricsControlsOpen = false },
+                                        onHideControls = { if (!keepLyricsControlsVisible) lyricsControlsOpen = false },
                                         translationProgress = particleProgress,
                                         onScrollingChange = { lyricsScrolling = it },
                                         canPick = lyricsShareEnabled,

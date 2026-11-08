@@ -276,7 +276,12 @@ import com.music.bitchord.ui.components.ListenBrainzTokenAlert
 import com.music.bitchord.ui.components.MiniPlayer
 import com.music.bitchord.ui.components.QueueActionNotice
 import com.music.bitchord.ui.components.QueueActionNoticeHost
+import com.music.bitchord.carplay.CarPlayWebBridge
+import com.music.bitchord.ui.components.CarPlaySheet
 import com.music.bitchord.ui.components.TopBarAccountButton
+import com.music.bitchord.ui.components.TopBarCarPlayButton
+import com.music.bitchord.ui.components.TopBarFpsCounter
+import com.music.bitchord.ui.components.TopBarThemeSelector
 import com.music.bitchord.ui.screens.SegmentedControl
 import com.music.bitchord.ui.components.SearchField
 import com.music.bitchord.sharedui.resources.Res as SharedRes
@@ -394,6 +399,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        CarPlayWebBridge.init(this)
         // Before the composition, so a cold launch from a widget's artwork has
         // the request already standing by the time BitChordApp first reads it.
         PlayerDeepLink.consume(intent)
@@ -661,6 +667,7 @@ private fun BitChordApp(
     var editingSignatureApi by remember { mutableStateOf(false) }
     var librarySortMenuOpen by remember { mutableStateOf(false) }
     var showLyricsSources by remember { mutableStateOf(false) }
+    var showCarPlaySheet by remember { mutableStateOf(false) }
     var showAppLanguage by remember { mutableStateOf(false) }
     var showTranslationLanguage by remember { mutableStateOf(false) }
     var showAccountSelector by remember { mutableStateOf(false) }
@@ -1644,7 +1651,13 @@ private fun BitChordApp(
                 source = source,
             )
             c.playSongs(oneOffQueue, 0)
-            // Start radio in the mini-player; the user opens the full view by tapping it.
+            if (source.type == PlaybackSourceType.HOME && AppSettings.openPlayerOnHomeSongTap.value) {
+                if (reducePlayerMotion || player.song == null) {
+                    showNowPlaying = true
+                } else {
+                    playerSheetMotion.open()
+                }
+            }
         }
     }
 
@@ -2128,6 +2141,144 @@ private fun BitChordApp(
     val onShelfLongPress: (ShelfItem) -> Unit = { item ->
         val song = shelfSong(item)
         if (song != null) openSongMenu(song) else onBrowseLongPress(item)
+    }
+
+    // ---- CarPlay / iPhone Web Companion state & UI controller bridge ----
+    androidx.compose.runtime.SideEffect {
+        CarPlayWebBridge.homeShelvesSnapshot = (visibleHomeState as? UiState.Success)?.data.orEmpty()
+        CarPlayWebBridge.libraryShelvesSnapshot = (libraryState as? UiState.Success)?.data?.shelves.orEmpty()
+        CarPlayWebBridge.currentLyricsSnapshot = lyrics
+        CarPlayWebBridge.currentLyricsSourceSnapshot = lyricsSource?.name
+        CarPlayWebBridge.currentDetailSnapshot = detail
+        CarPlayWebBridge.currentSongSnapshot = player.song
+        CarPlayWebBridge.currentLikeStatusSnapshot = player.song?.let(likeStatusOf) ?: LikeStatus.INDIFFERENT
+        CarPlayWebBridge.currentShuffleSnapshot = shuffleEnabled
+        CarPlayWebBridge.updatePlaybackSnapshot()
+        CarPlayWebBridge.currentRepeatModeSnapshot = player.repeatMode
+        CarPlayWebBridge.listenerNameSnapshot = account?.name
+        CarPlayWebBridge.listenerAvatarUrlSnapshot = account?.thumbnailUrl
+        CarPlayWebBridge.androidScreenState = CarPlayWebBridge.AndroidScreenState(
+            selectedTab = selectedTab,
+            showNowPlaying = showNowPlaying,
+            lyricsOpen = false,
+            queueOpen = false,
+            detailBrowseId = detail?.browseId,
+            detailTitle = detail?.title,
+        )
+        CarPlayWebBridge.uiController = object : CarPlayWebBridge.UiController {
+            override fun onPlaySong(song: Song, shelfTitle: String?) {
+                val srcTitle = shelfTitle?.takeIf { it.isNotBlank() } ?: homeLabel
+                playRadio(song, QueueSource(srcTitle, PlaybackSourceType.HOME))
+            }
+
+            override fun onPlayShelfItem(item: ShelfItem, shelfTitle: String) {
+                val song = shelfSong(item)
+                val bid = item.browseId
+                if (song != null) {
+                    val srcTitle = shelfTitle.takeIf { it.isNotBlank() } ?: homeLabel
+                    playRadio(song, QueueSource(srcTitle, PlaybackSourceType.HOME))
+                } else if (bid != null) {
+                    viewModel.openDetail(
+                        browseId = bid,
+                        title = item.title,
+                        subtitle = item.subtitle,
+                        thumbnailUrl = item.thumbnailUrl,
+                    )
+                }
+            }
+
+            override fun onOpenDetail(browseId: String, title: String, subtitle: String, thumbnailUrl: String?) {
+                dismissPlayer()
+                viewModel.openDetail(
+                    browseId = browseId,
+                    title = title,
+                    subtitle = subtitle,
+                    thumbnailUrl = thumbnailUrl,
+                )
+            }
+
+            override fun onPlayDetailSong(songs: List<Song>, index: Int, pageTitle: String, browseId: String) {
+                val source = QueueSource(
+                    title = pageTitle.ifBlank { queueLabel },
+                    type = PlaybackSourceType.BROWSE,
+                    id = browseId.ifBlank { null },
+                )
+                playFrom(songs, index, source)
+            }
+
+            override fun onPlayQueueIndex(index: Int) {
+                controller?.let { c ->
+                    if (index in 0 until c.mediaItemCount) {
+                        c.seekTo(index, 0L)
+                        c.play()
+                    }
+                }
+            }
+
+            override fun onTogglePlay() {
+                togglePlayPause()
+            }
+
+            override fun onSeekTo(positionMs: Long) {
+                controller?.let { c ->
+                    val duration = c.duration
+                    val clamped = if (duration > 0) {
+                        positionMs.coerceIn(0L, (duration - SEEK_END_GUARD_MS).coerceAtLeast(0L))
+                    } else {
+                        positionMs.coerceAtLeast(0L)
+                    }
+                    c.seekTo(clamped)
+                    com.music.bitchord.carplay.CarPlayWebBridge.speaker?.takeIf { it.active }?.seekTo(clamped)
+                }
+            }
+
+            override fun onNext() {
+                controller?.seekToNextMediaItem()
+            }
+
+            override fun onPrevious() {
+                controller?.seekToPrevious()
+            }
+
+            override fun onToggleShuffle() {
+                controller?.toggleShuffle()
+            }
+
+            override fun onCycleRepeat() {
+                controller?.let { c ->
+                    val next = when (c.repeatMode) {
+                        Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+                        Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+                        else -> Player.REPEAT_MODE_OFF
+                    }
+                    AppSettings.setRepeatMode(next)
+                    c.repeatMode = next
+                }
+            }
+
+            override fun onToggleLike(song: Song) {
+                toggleLikeOf(song)
+            }
+
+            override fun onSelectTab(tabIndex: Int) {
+                if (tabIndex in 0..3) {
+                    dismissPlayer()
+                    navigator.clear()
+                    viewModel.closeMoodGenre()
+                    selectedTab = tabIndex
+                }
+            }
+
+            override fun onSetNowPlayingOpen(open: Boolean) {
+                if (open) {
+                    if (player.song != null) {
+                        showNowPlaying = true
+                    }
+                } else {
+                    dismissPlayer()
+                }
+            }
+        }
     }
 
     /**
@@ -3134,6 +3285,7 @@ private fun BitChordApp(
                                 onSources = { navigator.push(AppRoute.Sources) },
                                 onListenTogether = { navigator.push(AppRoute.ListenTogether) },
                                 onWearOs = { navigator.push(AppRoute.WearOs) },
+                                onCarPlay = { showCarPlaySheet = true },
                                 onSpotifyCanvasAuth = { showSpotifyCanvasAuth = true },
                                 onAppLanguage = { showAppLanguage = true },
                                 onEditSignatureApi = { editingSignatureApi = true },
@@ -3417,6 +3569,7 @@ private fun BitChordApp(
                                 topPicks = topPicks,
                                 topPicksLoading = topPicksLoading,
                                 listenerName = account?.name,
+                                listenerAvatarUrl = account?.thumbnailUrl,
                                 // Neither shelf is drawn without its callback.
                                 onTopPickClick = openTopPick.takeUnless { hideTopPicks },
                                 onMoodClick = playMood.takeUnless { hideHomeMoods },
@@ -3871,6 +4024,23 @@ private fun BitChordApp(
                                     },
                                 ),
                             )
+                        }
+                    } else null,
+                    trailingAccessory = if (
+                        selectedTab == TAB_HOME && route == null && detail == null && selectedMoodGenre == null
+                    ) {
+                        {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                TopBarFpsCounter(hazeState = hazeState)
+                                TopBarCarPlayButton(
+                                    onClick = { showCarPlaySheet = true },
+                                    hazeState = hazeState,
+                                )
+                                TopBarThemeSelector(hazeState = hazeState)
+                            }
                         }
                     } else null,
                     actions = {
@@ -4529,6 +4699,19 @@ private fun BitChordApp(
                             Toast.makeText(context, R.string.remove_from_history_failed, Toast.LENGTH_SHORT).show()
                         })
                     }
+                },
+                onNotInterested = if (!fromPlayer && song.localUri == null) {
+                    {
+                        songActions = null
+                        viewModel.markNotInterested(
+                            videoId = song.videoId,
+                            title = song.title,
+                            feedbackToken = song.feedbackToken,
+                        )
+                        showQueueNotice("「${song.title}」を興味なしに設定しました")
+                    }
+                } else {
+                    null
                 },
                 onOpenAlbum = { id ->
                     openPage(
@@ -5243,6 +5426,18 @@ private fun BitChordApp(
                         scope.launch { Downloads.deleteCollection(context, id) }
                     }
                 },
+                onNotInterested = if (target.fromCard && remote) {
+                    {
+                        browseActions = null
+                        viewModel.markNotInterested(
+                            browseId = target.browseId,
+                            title = target.title,
+                        )
+                        showQueueNotice("「${target.title}」を興味なしに設定しました")
+                    }
+                } else {
+                    null
+                },
             )
         }
         // In a recompose scope of its own, as the track menu's is.
@@ -5466,6 +5661,13 @@ private fun BitChordApp(
             LyricsSourcesDialog(
                 hazeState = hazeState,
                 onDismiss = { showLyricsSources = false },
+            )
+        }
+
+        if (showCarPlaySheet) {
+            BackHandler { showCarPlaySheet = false }
+            CarPlaySheet(
+                onDismiss = { showCarPlaySheet = false },
             )
         }
 

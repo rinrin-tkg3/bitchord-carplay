@@ -486,8 +486,20 @@ fun List<HomeShelf>.withoutVideos(): List<HomeShelf> = mapNotNull { shelf ->
 fun shelfLayoutFor(title: String, items: List<ShelfItem>, fromList: Boolean): ShelfLayout {
     if (items.isEmpty()) return ShelfLayout.CARDS
     val first = items.first()
+    val trimmed = title.trim()
     if (fromList && first.videoId != null) return ShelfLayout.LIST
-    if (title.trim().equals("Listen again", ignoreCase = true)) return ShelfLayout.LIST
+    if (first.videoId != null && (
+            trimmed.equals("Listen again", ignoreCase = true) ||
+                trimmed.equals("もう一度聴く", ignoreCase = true) ||
+                trimmed.equals("Nghe lại", ignoreCase = true) ||
+                trimmed.equals("Quick picks", ignoreCase = true) ||
+                trimmed.equals("クイック ミックス", ignoreCase = true) ||
+                trimmed.equals("Lựa chọn nhanh", ignoreCase = true) ||
+                trimmed.equals("Chọn nhanh đài phát", ignoreCase = true)
+            )
+    ) {
+        return ShelfLayout.LIST
+    }
     if (items.count { it.isVideo } * 2 > items.size) return ShelfLayout.VIDEO
     return ShelfLayout.CARDS
 }

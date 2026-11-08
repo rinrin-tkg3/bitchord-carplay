@@ -1,5 +1,6 @@
 package com.music.bitchord.ui.components
 
+import android.view.Choreographer
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -14,15 +15,19 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -31,9 +36,13 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.CornerBasedShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import com.music.bitchord.ui.icons.SfIcons
+import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.Person
+import com.music.bitchord.carplay.CarPlayWebBridge
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,16 +52,23 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -60,20 +76,35 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.max
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import com.music.bitchord.R
 import com.music.bitchord.data.model.Account
 import com.music.bitchord.data.settings.AppSettings
+import com.music.bitchord.data.settings.ThemeMode
+import com.music.bitchord.ui.components.backdrop.backdrops.layerBackdrop
+import com.music.bitchord.ui.components.backdrop.backdrops.rememberLayerBackdrop
+import com.music.bitchord.ui.components.floatingtabbar.FlatSelectionPill
+import com.music.bitchord.ui.components.floatingtabbar.GlassPillMotion
+import com.music.bitchord.ui.components.floatingtabbar.GlassSelectionPill
+import com.music.bitchord.ui.components.floatingtabbar.PILL_GROW_HEIGHT
+import com.music.bitchord.ui.components.floatingtabbar.pillPlacement
+import com.music.bitchord.ui.haptics.Haptic
+import com.music.bitchord.ui.haptics.rememberHaptics
 import com.music.bitchord.ui.theme.stableStatusBarInsets
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
@@ -179,6 +210,7 @@ fun FrostedTopBar(
      * Root tabs have no back button there for it to collide with.
      */
     accessory: (@Composable () -> Unit)? = null,
+    trailingAccessory: (@Composable () -> Unit)? = null,
     actions: @Composable () -> Unit = {},
 ) {
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
@@ -331,6 +363,10 @@ fun FrostedTopBar(
                     Box(Modifier.weight(1f)) {
                         AccessoryPill(content = accessory)
                     }
+                    Spacer(Modifier.width(ACCESSORY_GAP))
+                }
+                if (trailingAccessory != null) {
+                    trailingAccessory()
                     Spacer(Modifier.width(ACCESSORY_GAP))
                 }
                 if (useFloatingChrome) {
@@ -685,4 +721,339 @@ private val PUCK_OVERSHOOT = 20.dp
  * Smaller than an icon's 24dp box: a filled circle carries more weight than a
  * glyph does, and at 24 it sat heavier in the bar than the wordmark opposite it.
  */
+/**
+ * Compact 3-icon Liquid Glass theme selector (Dark / Light / System) placed
+ * beside [TopBarAccountButton] on the Home top bar.
+ *
+ * Uses the exact same [Modifier.liquidGlass] surface, [FlatSelectionPill] and
+ * [GlassSelectionPill] lens refraction physics as [GlassNavBar] / [FloatingTabBar].
+ */
+@OptIn(ExperimentalHazeMaterialsApi::class)
+@Composable
+fun TopBarThemeSelector(
+    hazeState: HazeState?,
+    modifier: Modifier = Modifier,
+) {
+    val themeMode by AppSettings.themeMode.collectAsStateWithLifecycle()
+    val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
+    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val haptics = rememberHaptics()
+    val scope = rememberCoroutineScope()
+
+    val modes = remember {
+        listOf(ThemeMode.DARK, ThemeMode.LIGHT, ThemeMode.SYSTEM)
+    }
+    val selectedIndex = when (themeMode) {
+        ThemeMode.DARK -> 0
+        ThemeMode.LIGHT -> 1
+        ThemeMode.SYSTEM -> 2
+    }
+
+    val pill = remember { GlassPillMotion(scope, selectedIndex) }
+    pill.reduceMotion = reduceAnimation
+
+    val useLiquidGlass = LocalLiquidGlassEnabled.current && isGlassSupported()
+    val glassPill = useLiquidGlass && !reduceDynamicBlur
+    val barGlass = rememberLayerBackdrop()
+    val tabRow = rememberLayerBackdrop()
+
+    var rowSize by remember { mutableStateOf(IntSize.Zero) }
+    var lastHapticTab by remember { mutableIntStateOf(selectedIndex) }
+    val currentSelectedIndex by rememberUpdatedState(selectedIndex)
+
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    val isRtl = layoutDirection == LayoutDirection.Rtl
+    val tabCount = modes.size
+    val tabWidthPx = if (rowSize.width > 0) rowSize.width.toFloat() / tabCount else 0f
+    val tabStepPx = tabWidthPx
+    pill.stepDp = tabStepPx / density.density
+    val currentTabStepPx by rememberUpdatedState(tabStepPx)
+    val currentIsRtl by rememberUpdatedState(isRtl)
+
+    val pillInset = 4.dp
+    val padPx = with(density) { pillInset.toPx() }
+    val rowHeightPx = rowSize.height.toFloat()
+    val restSize = Size(tabWidthPx, rowHeightPx)
+    val liftedHeightPx = rowHeightPx + padPx * 2f + with(density) { PILL_GROW_HEIGHT.toPx() }
+    val liftedSize = if (rowHeightPx > 0f) {
+        Size(liftedHeightPx * tabWidthPx / rowHeightPx, liftedHeightPx)
+    } else {
+        restSize
+    }
+    val pillCenterInRow: (Float) -> Offset = { position ->
+        val x = position * tabStepPx + tabWidthPx / 2f
+        Offset(if (isRtl) rowSize.width - x else x, rowHeightPx / 2f)
+    }
+    val showPill = tabWidthPx > 0f
+
+    LaunchedEffect(selectedIndex) {
+        pill.animateTo(selectedIndex)
+        lastHapticTab = selectedIndex
+    }
+
+    val pillShape = remember { RoundedCornerShape(percent = 50) }
+    val contentColor = if (glassPill) glassContentColor() else MaterialTheme.colorScheme.onSurface
+    val selectedColor = contentColor
+    val unselectedColor = contentColor.copy(alpha = 0.65f)
+    val indicatorColor = if (glassPill) {
+        glassIndicatorColor()
+    } else {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)
+    }
+
+    Box(modifier = modifier.height(TOP_CONTROL_SIZE)) {
+        CompositionLocalProvider(LocalGlassExport provides barGlass) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .then(artworkPageSurface(shape = pillShape, hazeState = hazeState))
+                    .padding(pillInset),
+            ) {
+                if (showPill && (!glassPill || pill.isFlat)) {
+                    FlatSelectionPill(
+                        color = indicatorColor,
+                        modifier = Modifier
+                            .matchParentSize()
+                            .pillPlacement(
+                                center = { pillCenterInRow(pill.position) },
+                                size = { pill.liveSize(restSize, liftedSize) },
+                            ),
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .onSizeChanged { rowSize = it }
+                        .layerBackdrop(tabRow)
+                        .pointerInput(Unit) {
+                            var totalDrag = 0f
+                            var dragStartIndex = currentSelectedIndex
+                            var direction = 1f
+                            var step = 0f
+                            var holding = false
+                            detectHorizontalDragGestures(
+                                onDragStart = {
+                                    step = currentTabStepPx
+                                    holding = step > 0f
+                                    if (!holding) return@detectHorizontalDragGestures
+                                    direction = if (currentIsRtl) -1f else 1f
+                                    totalDrag = 0f
+                                    dragStartIndex = currentSelectedIndex
+                                    pill.startDrag()
+                                },
+                                onDragCancel = {
+                                    if (holding) pill.release(currentSelectedIndex)
+                                    holding = false
+                                },
+                                onDragEnd = {
+                                    if (!holding) return@detectHorizontalDragGestures
+                                    holding = false
+                                    val absoluteIndexFloat = (dragStartIndex + totalDrag / step)
+                                        .coerceIn(0f, modes.lastIndex.toFloat())
+                                    val newIndex = absoluteIndexFloat.roundToInt()
+                                    pill.release(newIndex)
+                                    val newMode = modes[newIndex]
+                                    if (newMode != AppSettings.themeMode.value) {
+                                        AppSettings.setThemeMode(newMode)
+                                    }
+                                },
+                                onHorizontalDrag = { _, delta ->
+                                    if (!holding) return@detectHorizontalDragGestures
+                                    totalDrag += delta * direction
+                                    val absoluteIndexFloat = (dragStartIndex + totalDrag / step)
+                                        .coerceIn(0f, modes.lastIndex.toFloat())
+                                    pill.dragTo(absoluteIndexFloat)
+                                    val approximateTab = absoluteIndexFloat.roundToInt()
+                                    if (approximateTab != lastHapticTab) {
+                                        haptics.play(Haptic.Tick)
+                                        lastHapticTab = approximateTab
+                                    }
+                                },
+                            )
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    modes.forEachIndexed { index, mode ->
+                        val isSelected = index == selectedIndex
+                        val iconScale by animateFloatAsState(
+                            targetValue = if (isSelected) 1.08f else 1f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessMediumLow,
+                            ),
+                            label = "themeIconScale",
+                        )
+                        val icon = when (mode) {
+                            ThemeMode.DARK -> Icons.Rounded.DarkMode
+                            ThemeMode.LIGHT -> SfIcons.Brightness
+                            ThemeMode.SYSTEM -> SfIcons.Gradient
+                        }
+                        Box(
+                            modifier = Modifier
+                                .width(34.dp)
+                                .fillMaxHeight()
+                                .clip(pillShape)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) {
+                                    if (!isSelected) {
+                                        haptics.play(Haptic.Select)
+                                        AppSettings.setThemeMode(mode)
+                                    }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = mode.name,
+                                tint = if (isSelected) selectedColor else unselectedColor,
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .graphicsLayer {
+                                        scaleX = iconScale
+                                        scaleY = iconScale
+                                    },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (glassPill && showPill && !pill.isFlat) {
+            GlassSelectionPill(
+                motion = pill,
+                fillColor = indicatorColor,
+                barGlass = barGlass,
+                tabRow = tabRow,
+                modifier = Modifier
+                    .matchParentSize()
+                    .pillPlacement(
+                        center = { pillCenterInRow(pill.position) + Offset(padPx, padPx) },
+                        size = { pill.liveSize(restSize, liftedSize) },
+                    ),
+            )
+        }
+    }
+}
+
+/**
+ * Compact Liquid Glass FPS counter pill displayed at the top-right of the Home screen.
+ */
+@OptIn(ExperimentalHazeMaterialsApi::class)
+@Composable
+fun TopBarFpsCounter(
+    hazeState: HazeState?,
+    modifier: Modifier = Modifier,
+) {
+    var fps by remember { mutableIntStateOf(60) }
+    DisposableEffect(Unit) {
+        val choreographer = Choreographer.getInstance()
+        var frameCount = 0
+        var startNanos = 0L
+        var active = true
+        val callback = object : Choreographer.FrameCallback {
+            override fun doFrame(frameTimeNanos: Long) {
+                if (!active) return
+                if (startNanos == 0L) {
+                    startNanos = frameTimeNanos
+                } else {
+                    frameCount++
+                    val elapsed = frameTimeNanos - startNanos
+                    if (elapsed >= 500_000_000L) {
+                        fps = ((frameCount * 1_000_000_000.0) / elapsed).roundToInt().coerceIn(1, 240)
+                        frameCount = 0
+                        startNanos = frameTimeNanos
+                    }
+                }
+                choreographer.postFrameCallback(this)
+            }
+        }
+        choreographer.postFrameCallback(callback)
+        onDispose {
+            active = false
+            choreographer.removeFrameCallback(callback)
+        }
+    }
+
+    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val useLiquidGlass = LocalLiquidGlassEnabled.current && isGlassSupported()
+    val useGlass = useLiquidGlass && !reduceDynamicBlur
+    val pillShape = remember { RoundedCornerShape(percent = 50) }
+    val contentColor = if (useGlass) glassContentColor() else MaterialTheme.colorScheme.onSurface
+
+    Box(
+        modifier = modifier
+            .height(28.dp)
+            .then(artworkPageSurface(shape = pillShape, hazeState = hazeState))
+            .padding(horizontal = 9.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "$fps FPS",
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFeatureSettings = "tnum",
+            ),
+            color = contentColor.copy(alpha = 0.88f),
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * Compact CarPlay / iPhone Companion button displayed in the Home top bar.
+ * Shows a green dot when outputting audio to iPhone/CarPlay, or a blue dot when an iPhone is connected.
+ */
+@OptIn(ExperimentalHazeMaterialsApi::class)
+@Composable
+fun TopBarCarPlayButton(
+    onClick: () -> Unit,
+    hazeState: HazeState?,
+    modifier: Modifier = Modifier,
+) {
+    val carPlaySession by CarPlayWebBridge.carPlaySession.collectAsStateWithLifecycle()
+    val connectedClients by CarPlayWebBridge.connectedClients.collectAsStateWithLifecycle()
+    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val useLiquidGlass = LocalLiquidGlassEnabled.current && isGlassSupported()
+    val useGlass = useLiquidGlass && !reduceDynamicBlur
+    val contentColor = if (useGlass) glassContentColor() else MaterialTheme.colorScheme.onSurface
+
+    val badgeColor = when {
+        carPlaySession -> Color(0xFF30D158)
+        connectedClients > 0 -> Color(0xFF0A84FF)
+        else -> null
+    }
+
+    Box(
+        modifier = modifier
+            .size(TOP_CONTROL_SIZE)
+            .then(artworkPageSurface(shape = CircleShape, hazeState = hazeState))
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.DirectionsCar,
+            contentDescription = "CarPlay / iPhone 連携",
+            tint = if (carPlaySession) Color(0xFF30D158) else contentColor,
+            modifier = Modifier.size(20.dp),
+        )
+        if (badgeColor != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 8.dp, end = 8.dp)
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(badgeColor),
+            )
+        }
+    }
+}
+
 private val AVATAR_SIZE = 28.dp

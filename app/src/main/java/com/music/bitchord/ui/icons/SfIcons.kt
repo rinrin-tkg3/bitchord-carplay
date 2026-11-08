@@ -1,7 +1,11 @@
 package com.music.bitchord.ui.icons
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathBuilder
 import androidx.compose.ui.graphics.vector.VectorGroup
 import androidx.compose.ui.graphics.vector.VectorPath
 import androidx.compose.ui.unit.dp
@@ -178,6 +182,83 @@ object SfIcons {
     val MusicNote: ImageVector by lazy { bold(SfSymbols.Monochrome.SFMusicNote) }
     val MusicOff: ImageVector by lazy { bold(SfSymbols.Monochrome.SFMusicNoteSlash) }
     val Notes: ImageVector by lazy { bold(SfSymbols.Monochrome.SFTextAlignleft) }
+    val LyricsControlsPinned: ImageVector by lazy {
+        val ink = SolidColor(Color.Black)
+        canvas(name = "LyricsControlsPinned", width = 26f, height = 26f) {
+            // Top: two lyric lines (full line + active shorter line)
+            addPath(
+                pathData = PathBuilder().apply {
+                    moveTo(3.2f, 4.2f)
+                    lineTo(22.8f, 4.2f)
+                    moveTo(3.2f, 9.0f)
+                    lineTo(16.2f, 9.0f)
+                }.nodes,
+                fill = null,
+                stroke = ink,
+                strokeLineWidth = 2.6f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            )
+            // Middle: player seek bar track
+            addPath(
+                pathData = PathBuilder().apply {
+                    moveTo(3.2f, 15.0f)
+                    lineTo(22.8f, 15.0f)
+                }.nodes,
+                fill = null,
+                stroke = ink,
+                strokeLineWidth = 2.1f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            )
+            // Scrubber thumb circle at (10.5, 15.0)
+            addPath(
+                pathData = PathBuilder().apply {
+                    moveTo(10.5f, 12.4f)
+                    arcToRelative(2.6f, 2.6f, 0f, true, true, 0f, 5.2f)
+                    arcToRelative(2.6f, 2.6f, 0f, true, true, 0f, -5.2f)
+                    close()
+                }.nodes,
+                fill = ink,
+            )
+            // Bottom: previous, play triangle, and next transport controls
+            addPath(
+                pathData = PathBuilder().apply {
+                    // Center Play button
+                    moveTo(11.3f, 19.3f)
+                    lineTo(15.7f, 21.8f)
+                    lineTo(11.3f, 24.3f)
+                    close()
+                }.nodes,
+                fill = ink,
+                stroke = ink,
+                strokeLineWidth = 1.4f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            )
+            addPath(
+                pathData = PathBuilder().apply {
+                    // Left skip-back chevron + bar
+                    moveTo(7.0f, 19.8f)
+                    lineTo(4.6f, 21.8f)
+                    lineTo(7.0f, 23.8f)
+                    moveTo(4.2f, 20.0f)
+                    lineTo(4.2f, 23.6f)
+                    // Right skip-forward chevron + bar
+                    moveTo(19.0f, 19.8f)
+                    lineTo(21.4f, 21.8f)
+                    lineTo(19.0f, 23.8f)
+                    moveTo(21.8f, 20.0f)
+                    lineTo(21.8f, 23.6f)
+                }.nodes,
+                fill = null,
+                stroke = ink,
+                strokeLineWidth = 2.0f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            )
+        }
+    }
     val Performance: ImageVector by lazy { bold(SfSymbols.Monochrome.SFGaugeWithDotsNeedle67percent) }
     val Person: ImageVector by lazy { bold(SfSymbols.Monochrome.SFPerson) }
     val PlayCircle: ImageVector by lazy { bold(SfSymbols.Monochrome.SFPlayCircle) }

@@ -1,0 +1,48 @@
+name: Build BitChord CarPlay iOS (.ipa)
+
+on:
+  push:
+    branches: [ "**" ]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios-build.yml'
+  workflow_dispatch:
+
+jobs:
+  build-ipa:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+
+      - name: Build BitChordCarPlay iOS App
+        run: |
+          cd ios/BitChordCarPlay
+          xcodebuild clean build \
+            -project BitChordCarPlay.xcodeproj \
+            -scheme BitChordCarPlay \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            BUILD_DIR=build
+
+      - name: Package .ipa
+        run: |
+          cd ios/BitChordCarPlay
+          mkdir -p Payload
+          cp -r build/Release-iphoneos/BitChordCarPlay.app Payload/
+          zip -r BitChordCarPlay.ipa Payload
+          ls -lh BitChordCarPlay.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BitChordCarPlay-ipa
+          path: ios/BitChordCarPlay/BitChordCarPlay.ipa
+          retention-days: 14

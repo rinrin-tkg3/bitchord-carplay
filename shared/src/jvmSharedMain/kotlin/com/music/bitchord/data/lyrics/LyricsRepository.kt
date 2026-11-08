@@ -158,18 +158,21 @@ object LyricsRepository {
 
         try {
             var lineSynced: Result? = null
+            var plainText: Result? = null
             for ((source, job) in racing) {
                 // If we already found a line-synced or better result, skip Genius completely
                 if (lineSynced != null && source == LyricsSource.GENIUS) continue
 
                 val found = runCatching { job.await() }.getOrNull() ?: continue
                 if (found.lines.any { it.isWordSynced }) return@coroutineScope found
-                if (!prioritizeSyllableSync && found.lines.any { it.timeMs > 0 }) {
-                    return@coroutineScope found
+                if (found.lines.any { it.timeMs > 0 }) {
+                    if (!prioritizeSyllableSync) return@coroutineScope found
+                    if (lineSynced == null) lineSynced = found
+                } else {
+                    if (plainText == null) plainText = found
                 }
-                if (lineSynced == null) lineSynced = found
             }
-            lineSynced
+            lineSynced ?: plainText
         } finally {
             // Whoever lost the race is no longer worth waiting on, and
             // coroutineScope will not return while they are still running.
@@ -192,6 +195,7 @@ object LyricsRepository {
         get: suspend (String) -> String?,
     ): List<LyricLine>? {
         val found = when (source) {
+            LyricsSource.PETIT_LYRICS -> PetitLyrics.lyrics(title, artist, durationMs, album)
             LyricsSource.LRC_RED -> LrcRed.lyrics(title, artist, durationMs, isrc, get)
             LyricsSource.BETTER_LYRICS -> BetterLyrics.lyrics(title, artist, durationMs, album)
             LyricsSource.BETTER_LYRICS_PORTATO -> BetterLyrics.portato(title, artist, durationMs, album)

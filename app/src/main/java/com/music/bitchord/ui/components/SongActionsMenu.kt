@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material3.CircularProgressIndicator
@@ -132,6 +134,8 @@ fun SongActionsMenu(
      * row — the History screen passes one only when the menu is opened there.
      */
     onRemoveFromHistory: (() -> Unit)? = null,
+    /** Marks this track as "Not interested" and hides it from the Home feed. */
+    onNotInterested: (() -> Unit)? = null,
     showSleepTimer: Boolean = false,
     /**
      * Sends the playing track back to YouTube's own upload, and keeps it there.
@@ -342,6 +346,14 @@ fun SongActionsMenu(
             ActionRow(
                 icon = SfIcons.History,
                 label = stringResource(R.string.remove_from_history),
+                accent = palette.accent,
+                onClick = it,
+            )
+        }
+        onNotInterested?.let {
+            ActionRow(
+                icon = Icons.Rounded.Block,
+                label = "興味なし",
                 accent = palette.accent,
                 onClick = it,
             )

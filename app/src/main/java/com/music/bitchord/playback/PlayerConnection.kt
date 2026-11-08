@@ -397,7 +397,7 @@ fun rememberPlayerState(controller: MediaController?): PlayerState {
                 // ramp: reported moving forward, and only a reading to correct
                 // towards, not a jump. Its loop wraps go backwards and count.
                 val reanchor = reason == Player.DISCONTINUITY_REASON_INTERNAL &&
-                    newPosition.positionMs > oldPosition.positionMs
+                    newPosition.positionMs >= oldPosition.positionMs
                 if (!reanchor) position.seeks++
             }
             override fun onEvents(p: Player, events: Player.Events) = sync(

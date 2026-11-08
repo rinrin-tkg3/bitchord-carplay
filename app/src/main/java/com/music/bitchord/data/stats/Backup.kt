@@ -52,6 +52,50 @@ object Backup {
             Instant.now().atZone(ZoneId.systemDefault()),
         )}.json"
 
+    /** A suggested filename for a settings-only export. */
+    fun suggestedSettingsName(): String =
+        "bitchord-settings-${DateTimeFormatter.ofPattern("yyyy-MM-dd").format(
+            Instant.now().atZone(ZoneId.systemDefault()),
+        )}.json"
+
+    /** Exports only app settings (without listening history) to [target]. */
+    suspend fun exportSettingsTo(context: Context, target: Uri): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val prefsMap = AppSettings.exportPrefs().mapNotNull { (key, value) ->
+                PrefValue.of(value)?.let { key to it }
+            }.toMap()
+            val file = BackupFile(
+                versionName = BuildConfig.VERSION_NAME,
+                exportedAt = Instant.now().toString(),
+                settings = prefsMap,
+                listening = emptyList(),
+            )
+            val text = json.encodeToString(BackupFile.serializer(), file)
+            context.contentResolver.openOutputStream(target, "wt")
+                ?.use { it.write(text.toByteArray()) }
+                ?: error("ファイルを開けませんでした")
+            prefsMap.size
+        }
+    }
+
+    /** Imports only app settings (leaving listening history intact) from [source]. */
+    suspend fun importSettingsFrom(context: Context, source: Uri): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val text = context.contentResolver.openInputStream(source)
+                ?.use { it.readBytes().decodeToString() }
+                ?: error("ファイルを開けませんでした")
+            val file = runCatching { json.decodeFromString(BackupFile.serializer(), text) }
+                .getOrElse { error("BitChordの設定ファイルではありません") }
+            require(file.app == APP_TAG) { "別アプリのバックアップファイルです" }
+            require(file.version <= SCHEMA_VERSION) {
+                "新しいバージョンのBitChordで作成されたファイルです"
+            }
+            AppSettings.importPrefs(file.settings.mapValues { it.value.decoded() })
+            SearchHistory.reload()
+            file.settings.size
+        }
+    }
+
     /**
      * Writes a backup to [target], a document the user picked.
      *

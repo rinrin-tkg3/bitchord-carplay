@@ -2,6 +2,7 @@ package com.music.bitchord.data.lyrics
 
 import com.music.bitchord.data.Http
 import kotlinx.serialization.json.Json
+import okhttp3.FormBody
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
@@ -48,6 +49,22 @@ internal fun lyricsGet(url: String): String? = runCatching {
         .build()
     client.newCall(request).execute().use { response ->
         if (response.isSuccessful) response.body?.string() else null
+    }
+}.getOrNull()
+
+/** Body of a successful UTF-8 form-urlencoded POST, or null for any failure at all. */
+internal fun lyricsPostForm(url: String, form: Map<String, String>): String? = runCatching {
+    val bodyBuilder = FormBody.Builder(Charsets.UTF_8)
+    for ((key, value) in form) {
+        bodyBuilder.add(key, value)
+    }
+    val request = Request.Builder().url(url)
+        .header("User-Agent", LYRICS_AGENT)
+        .header("Accept", "application/xml, text/xml, */*")
+        .post(bodyBuilder.build())
+        .build()
+    client.newCall(request).execute().use { response ->
+        if (response.isSuccessful) response.body?.bytes()?.toString(Charsets.UTF_8) else null
     }
 }.getOrNull()
 

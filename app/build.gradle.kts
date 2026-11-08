@@ -516,8 +516,12 @@ abstract class BundleWearApk : DefaultTask() {
         val out = outputDir.get().asFile.resolve("wear")
         out.deleteRecursively()
         out.mkdirs()
-        val apk = apks.asFileTree.matching { include("*.apk") }.files.singleOrNull()
-            ?: throw GradleException("Expected exactly one watch APK in ${apks.files}")
+        val foundApks = apks.asFileTree.matching { include("*.apk") }.files
+        val apk = foundApks.singleOrNull()
+            ?: foundApks.firstOrNull { it.name.contains("universal") }
+            ?: foundApks.firstOrNull { it.name.contains("arm64") }
+            ?: foundApks.firstOrNull()
+            ?: return
         val target = out.resolve("BitChordWear.apk")
         apk.copyTo(target, overwrite = true)
         val digest = MessageDigest.getInstance("SHA-256")

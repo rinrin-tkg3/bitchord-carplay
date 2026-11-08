@@ -50,3 +50,9 @@ AGENTS.md
 
 # Claude Code session files (launch configs, worktrees)
 .claude/
+
+# iOS
+ios/**/build/
+ios/**/xcuserdata/
+*.ipa
+

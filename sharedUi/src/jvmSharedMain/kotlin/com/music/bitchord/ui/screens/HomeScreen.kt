@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import com.music.bitchord.ui.components.ShelfRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -50,17 +51,21 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Cached
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Storage
 import com.music.bitchord.ui.icons.BitChordIcons
 import coil3.compose.AsyncImage
@@ -150,6 +155,8 @@ fun HomeScreen(
     topPicksLoading: Boolean = false,
     /** The signed-in account's name, for the personal station's "Name's Station". */
     listenerName: String? = null,
+    /** The signed-in account's avatar URL, shown next to the Quick Access heading. */
+    listenerAvatarUrl: String? = null,
     onTopPickClick: ((TopPick, String) -> Unit)? = null,
     onTopPickLongPress: ((TopPick) -> Unit)? = null,
     /** A Find Your Mood tile, and its name. The shelf is only drawn when this is set. */
@@ -203,19 +210,6 @@ fun HomeScreen(
                     )
                 }
             }
-            if (onTopPickClick != null) {
-                when {
-                    !topPicks.isNullOrEmpty() -> item(key = "top-picks") {
-                        TopPicksShelf(
-                            picks = topPicks,
-                            listenerName = listenerName,
-                            onClick = onTopPickClick,
-                            onLongPress = onTopPickLongPress,
-                        )
-                    }
-                    topPicks == null && topPicksLoading -> topPicksSkeleton()
-                }
-            }
             when (state) {
                 is UiState.Loading -> {
                     if (recentlyPlayedLoading) {
@@ -232,6 +226,8 @@ fun HomeScreen(
                     }
                     itemsIndexedShelves(
                         shelves = state.data,
+                        listenerName = listenerName,
+                        listenerAvatarUrl = listenerAvatarUrl,
                         onMoodClick = onMoodClick,
                         onMoodsShowAll = onMoodsShowAll,
                         onItemClick = onItemClick,
@@ -269,8 +265,69 @@ fun HomeScreen(
 }
 
 /** Recents mirrors the artist page's top-tracks pager; other shelves use square cards. */
+private fun isQuickPicksTitle(title: String): Boolean {
+    val t = title.trim()
+    return t.equals("Quick picks", ignoreCase = true) ||
+        t.equals("クイック ミックス", ignoreCase = true) ||
+        t.equals("おすすめ", ignoreCase = true) ||
+        t.equals("あなたへのおすすめ", ignoreCase = true) ||
+        t.equals("For you", ignoreCase = true) ||
+        t.equals("Lựa chọn nhanh", ignoreCase = true) ||
+        t.equals("Chọn nhanh đài phát", ignoreCase = true)
+}
+
+private fun buildQuickAccessItems(
+    shelves: List<HomeShelf>,
+    recommendedShelf: HomeShelf?,
+): List<ShelfItem> {
+    val recentsShelf = shelves.firstOrNull { it.title.equals(RECENTS_TITLE, ignoreCase = true) }
+    val otherShelves = shelves.filter { it !== recommendedShelf && it !== recentsShelf }
+
+    val songs = buildList {
+        recentsShelf?.items?.forEach(::add)
+        otherShelves.forEach { shelf ->
+            shelf.items.filter { it.videoId != null && !it.isVideo }.forEach(::add)
+        }
+        recommendedShelf?.items?.drop(4)?.forEach(::add)
+        recommendedShelf?.items?.take(4)?.forEach(::add)
+    }
+    val collections = buildList {
+        otherShelves.forEach { shelf ->
+            shelf.items.filter { it.browseId != null && !it.isVideo }.forEach(::add)
+        }
+    }
+
+    val seen = HashSet<String>()
+    val result = ArrayList<ShelfItem>(18)
+    var sIdx = 0
+    var cIdx = 0
+    // Interleave tracks and browsable albums/playlists/artists like YouTube Music's Speed Dial.
+    val pattern = booleanArrayOf(true, false, false, true, true, false, false, false, false)
+    var step = 0
+    while (result.size < 18 && (sIdx < songs.size || cIdx < collections.size)) {
+        val preferSong = pattern[step % pattern.size]
+        step++
+        val candidate = if (preferSong && sIdx < songs.size) {
+            songs[sIdx++]
+        } else if (!preferSong && cIdx < collections.size) {
+            collections[cIdx++]
+        } else if (sIdx < songs.size) {
+            songs[sIdx++]
+        } else {
+            collections[cIdx++]
+        }
+        val key = candidate.videoId ?: candidate.browseId ?: candidate.title
+        if (seen.add(key)) {
+            result.add(candidate)
+        }
+    }
+    return result
+}
+
 private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedShelves(
     shelves: List<HomeShelf>,
+    listenerName: String? = null,
+    listenerAvatarUrl: String? = null,
     onItemClick: (ShelfItem, String) -> Unit,
     onItemLongPress: ((ShelfItem) -> Unit)?,
     currentSong: Song?,
@@ -278,18 +335,55 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedShelves(
     onMoodClick: ((TopPickMood, String) -> Unit)? = null,
     onMoodsShowAll: () -> Unit = {},
 ) {
-    shelves.forEachIndexed { index, shelf ->
-        // Find Your Mood follows the lead shelf, as on Apple Music's Home.
-        if (index == 1 && onMoodClick != null) {
-            item(key = "find-your-mood") { FindYourMoodShelf(onMoodClick, onMoodsShowAll) }
+    if (shelves.isEmpty()) return
+
+    // 1. Top shelf: おすすめ (Quick picks / recommended tracks 4-row pager)
+    val recommendedShelf = shelves.firstOrNull { isQuickPicksTitle(it.title) }
+        ?: shelves.firstOrNull {
+            it.layout == ShelfLayout.LIST && !it.title.equals(RECENTS_TITLE, ignoreCase = true)
         }
+        ?: shelves.firstOrNull { shelf -> shelf.items.any { it.videoId != null } }
+        ?: shelves.first()
+
+    item(key = "top-recommended") {
+        val topShelf = recommendedShelf.copy(
+            title = "おすすめ",
+            subtitle = "",
+            layout = ShelfLayout.LIST,
+        )
+        RecentShelf(
+            shelf = topShelf,
+            onItemClick = { item -> onItemClick(item, topShelf.title) },
+            onItemLongPress = onItemLongPress,
+            currentSong = currentSong,
+            isPlaying = isPlaying,
+        )
+    }
+
+    // 2. Second shelf: クイック アクセス (3x3 paged square grid)
+    val quickAccessItems = buildQuickAccessItems(shelves, recommendedShelf)
+    if (quickAccessItems.isNotEmpty()) {
+        item(key = "quick-access-grid") {
+            QuickAccessShelf(
+                items = quickAccessItems,
+                listenerName = listenerName,
+                listenerAvatarUrl = listenerAvatarUrl,
+                onItemClick = { item -> onItemClick(item, "クイック アクセス") },
+                onItemLongPress = onItemLongPress,
+                currentSong = currentSong,
+                isPlaying = isPlaying,
+            )
+        }
+    }
+
+    // 3. Remaining shelves below
+    val remainingShelves = shelves.filter {
+        it !== recommendedShelf && !it.title.equals(RECENTS_TITLE, ignoreCase = true)
+    }
+    remainingShelves.forEachIndexed { index, shelf ->
         item(key = shelf.title + index) {
             val openItem: (ShelfItem) -> Unit = { item -> onItemClick(item, shelf.title) }
-            // Listen again and Quick picks are lists on the web player, as
-            // Recents is here: one pager for all three.
-            if (shelf.layout == ShelfLayout.LIST ||
-                (index == 0 && shelf.title.equals(RECENTS_TITLE, ignoreCase = true))
-            ) {
+            if (shelf.layout == ShelfLayout.LIST) {
                 RecentShelf(
                     shelf = shelf,
                     onItemClick = openItem,
@@ -305,6 +399,213 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedShelves(
                     currentSong = currentSong,
                     isPlaying = isPlaying,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickAccessShelf(
+    items: List<ShelfItem>,
+    listenerName: String?,
+    listenerAvatarUrl: String?,
+    onItemClick: (ShelfItem) -> Unit,
+    onItemLongPress: ((ShelfItem) -> Unit)?,
+    currentSong: Song?,
+    isPlaying: Boolean,
+) {
+    val pages = remember(items) { items.take(18).chunked(9) }
+    val rowState = rememberLazyListState()
+    val isCurrentItem = items.playingItemMatcher(currentSong)
+
+    Column(Modifier.padding(bottom = 26.dp)) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = PAGE_GUTTER, vertical = 10.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (!listenerAvatarUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = listenerAvatarUrl,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Rounded.Person,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                if (!listenerName.isNullOrBlank()) {
+                    Text(
+                        text = listenerName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(
+                    text = "クイック アクセス",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
+        BoxWithConstraints {
+            val gridWidth = (maxWidth - PAGE_GUTTER * 2).coerceAtLeast(180.dp)
+            ShelfRow(
+                state = rowState,
+                contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(pages) { pageItems ->
+                    Column(
+                        modifier = Modifier.width(gridWidth),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        for (rowIndex in 0 until 3) {
+                            val rowItems = pageItems.drop(rowIndex * 3).take(3)
+                            if (rowItems.isNotEmpty()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    for (colIndex in 0 until 3) {
+                                        val item = rowItems.getOrNull(colIndex)
+                                        if (item != null) {
+                                            QuickAccessTile(
+                                                item = item,
+                                                onClick = { onItemClick(item) },
+                                                onLongPress = onItemLongPress?.let { { it(item) } },
+                                                isCurrent = isCurrentItem(item),
+                                                isPlaying = isCurrentItem(item) && isPlaying,
+                                                modifier = Modifier.weight(1f),
+                                            )
+                                        } else {
+                                            Spacer(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .aspectRatio(1f),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (pages.size > 1) {
+            val currentPage = rowState.firstVisibleItemIndex.coerceIn(0, pages.lastIndex)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                for (i in pages.indices) {
+                    val selected = i == currentPage
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 4.dp)
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (selected) {
+                                    MaterialTheme.colorScheme.onBackground
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                                },
+                            ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun QuickAccessTile(
+    item: ShelfItem,
+    onClick: () -> Unit,
+    onLongPress: (() -> Unit)?,
+    isCurrent: Boolean,
+    isPlaying: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val isCollection = item.browseId != null && item.videoId == null
+    Box(
+        modifier = modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(10.dp))
+            .thumbnailBorder(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .longPressMenuClickable(onClick = onClick, onLongClick = onLongPress)
+            .contextClick(onLongPress),
+    ) {
+        AsyncImage(
+            model = item.thumbnailUrl.artworkAt(CARD_ART_PX),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+        if (isCurrent && isPlaying) SearchPlayingBars(Modifier.align(Alignment.Center))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomStart)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.80f),
+                        ),
+                    ),
+                )
+                .padding(start = 8.dp, end = 6.dp, top = 22.dp, bottom = 6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (isCollection) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.9f),
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
         }
     }
@@ -472,29 +773,46 @@ private fun HomeTitle(
     val logoHeight = with(LocalDensity.current) { (style.fontSize * LOGO_TO_FONT).toDp() }
     Column(modifier = modifier.padding(horizontal = PAGE_GUTTER, vertical = 8.dp)) {
         val logoModifier = Modifier
-            .padding(bottom = 14.dp)
             .height(logoHeight)
             .aspectRatio(LOGO_ASPECT)
-        if (festiveLogo) {
-            GoldenLogo(
-                painter = painterResource(Res.drawable.ic_logo),
-                modifier = logoModifier,
-                onClick = onFestiveLogoClick,
-            )
-        } else {
-            Icon(
-                painter = painterResource(Res.drawable.ic_logo),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onBackground,
-                modifier = logoModifier,
-            )
+        Row(
+            modifier = Modifier.padding(bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (festiveLogo) {
+                GoldenLogo(
+                    painter = painterResource(Res.drawable.ic_logo),
+                    modifier = logoModifier,
+                    onClick = onFestiveLogoClick,
+                )
+            } else {
+                Icon(
+                    painter = painterResource(Res.drawable.ic_logo),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onBackground,
+                    modifier = logoModifier,
+                )
+            }
+            Row(
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = "BitChord",
+                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                )
+                Text(
+                    text = "rinrin.ver",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 3.dp),
+                    maxLines = 1,
+                )
+            }
         }
-        // "Listen now" is hidden for now; the wordmark above stays.
-        // Text(
-        //     text = title,
-        //     style = style,
-        //     color = MaterialTheme.colorScheme.onBackground,
-        // )
     }
 }
 

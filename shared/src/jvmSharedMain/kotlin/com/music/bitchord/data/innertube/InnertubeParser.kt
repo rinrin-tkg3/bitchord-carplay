@@ -732,7 +732,7 @@ object InnertubeParser {
         // A podcast episode is billed to its show — "Episode • Sep 1 • Huberman
         // Lab" — and the show links to a podcast page, not an artist, so
         // neither credit reader above finds it and the date stood in instead.
-        val episode = rowType == "episode" || renderer.isPodcastEpisode()
+        val episode = rowType == "episode" || rowType == "エピソード" || renderer.isPodcastEpisode()
         val show = if (episode) showNameFromRuns(subtitleRuns) else null
 
         val thumbnails = renderer.o("thumbnail").o("musicThumbnailRenderer")
@@ -766,7 +766,7 @@ object InnertubeParser {
             // art where a catalogue track has square album cover art. Not an
             // episode, whose art is a widescreen still too: it is listened to,
             // and a "video" is dropped from the All tab's results.
-            isVideo = !episode && (rowType == "video" || thumbnails.isNotSquare()),
+            isVideo = !episode && (rowType == "video" || rowType == "動画" || rowType == "ミュージック ビデオ" || thumbnails.isNotSquare()),
             isExplicit = renderer.hasExplicitBadge(),
             // Extract the "Remove from history" feedback token from the row's menu, if present.
             feedbackToken = extractFeedbackToken(renderer),
@@ -886,7 +886,7 @@ object InnertubeParser {
             artists = completeArtistCredits(artist.orEmpty(), credits.artists),
             albumId = credits.albumId,
             albumName = credits.albumName,
-            isVideo = rowType == "video" || thumbnails.isNotSquare(),
+            isVideo = rowType == "video" || rowType == "動画" || rowType == "ミュージック ビデオ" || thumbnails.isNotSquare(),
             isExplicit = renderer["subtitleBadges"].hasExplicitBadge(),
         )
     }
@@ -1738,12 +1738,12 @@ object InnertubeParser {
      * counting one of the words YouTube counts with.
      */
     private val TALLY = Regex(
-        """[\d.,]+\s*[KMB]?\s+(plays|views|likes|songs|tracks|subscribers|""" +
-            """hours?|minutes?|seconds?)\b.*""",
+        """([\d.,]+\s*[KMB万億]?\s*(plays|views|likes|songs|tracks|subscribers|""" +
+            """hours?|minutes?|seconds?|回再生|回視聴|曲)\b.*|チャンネル登録者数.*)""",
         RegexOption.IGNORE_CASE,
     )
     /** Header words that mark a page as a release, whose rows share its credit. */
-    private val RELEASE_WORDS = setOf("album", "single", "ep")
+    private val RELEASE_WORDS = setOf("album", "single", "ep", "アルバム", "シングル")
     private val HEADER_RENDERERS = listOf(
         "musicResponsiveHeaderRenderer",
         "musicDetailHeaderRenderer",
@@ -1753,6 +1753,8 @@ object InnertubeParser {
     private val TYPE_WORDS = setOf(
         "song", "video", "album", "single", "ep", "artist",
         "playlist", "podcast", "episode",
+        "曲", "動画", "ミュージック ビデオ", "アルバム", "シングル", "アーティスト",
+        "プレイリスト", "ポッドキャスト", "エピソード",
     )
     /**
      * Flags a browse card as video content: "50 videos" in a subtitle

@@ -5,6 +5,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -143,6 +145,8 @@ fun BrowseActionsMenu(
      * also happens to be downloaded.
      */
     onDeleteDownload: (() -> Unit)? = null,
+    /** Marks this collection as "Not interested" and hides it from the Home feed. */
+    onNotInterested: (() -> Unit)? = null,
     /**
      * Rename: a text field and its keyboard have no place on a menu floating
      * over the page, so the row hands the job to the host, which raises a
@@ -234,6 +238,9 @@ fun BrowseActionsMenu(
             }
             onShare?.let {
                 ActionRow(SfIcons.Share, stringResource(R.string.share), onClick = it)
+            }
+            onNotInterested?.let {
+                ActionRow(Icons.Rounded.Block, "興味なし", onClick = it)
             }
             onTogglePin?.let {
                 ActionRow(

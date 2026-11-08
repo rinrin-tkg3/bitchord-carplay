@@ -40,6 +40,11 @@ enum class LyricsSource(
     // [LRC_RED] is ahead of all of them: it is where [BINI_LYRICS] gets its
     // documents now, so asking it directly is the same Apple timing without
     // the middleman, and it is the one a dead mirror can't take down with it.
+    PETIT_LYRICS(
+        label = "PetitLyrics",
+        detail = "プチリリ — 日本語曲・アニソンに強い文字単位の同期歌詞",
+        wordSynced = true,
+    ),
     LRC_RED(
         label = "lrc.red",
         detail = "Apple timings by recording, syllable by syllable",

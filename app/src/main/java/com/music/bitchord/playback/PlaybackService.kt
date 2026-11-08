@@ -151,6 +151,7 @@ import com.music.bitchord.playback.smart.AutomixAnalysisSource
 import com.music.bitchord.playback.smart.VersionAudioAligner
 import com.music.bitchord.widget.MediaWidget
 import com.music.bitchord.widget.MediaWidgetSnapshot
+import com.music.bitchord.carplay.CarPlayWebBridge
 import com.music.bitchord.wear.WearBridge
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -766,8 +767,13 @@ class PlaybackService : MediaLibraryService() {
         WearBridge.createSpeaker(this, scope, localPlayer = { player }, onChanged = { publishWidgetState() })
     }
 
+    /** The iPhone / CarPlay Web Companion as the speaker — same RemoteSpeaker model. */
+    private val carPlaySpeaker by lazy {
+        CarPlayWebBridge.createSpeaker(this, scope, localPlayer = { player }, onChanged = { publishWidgetState() })
+    }
+
     /** Every remote speaker, as the one the session player reports. */
-    private val speakers by lazy { Speakers(listOf(castPlayback, watchSpeaker)) }
+    private val speakers by lazy { Speakers(listOf(castPlayback, watchSpeaker, carPlaySpeaker)) }
 
     /**
      * Binds playback to a Listen Together party, when there is one.
@@ -1329,9 +1335,12 @@ class PlaybackService : MediaLibraryService() {
         // which Android may freeze the process mid-stream. Held up for the
         // length of the session instead.
         scope.launch {
-            WearBridge.watchSession.collect { onWatch ->
+            kotlinx.coroutines.flow.combine(
+                WearBridge.watchSession,
+                CarPlayWebBridge.carPlaySession,
+            ) { onWatch, onCarPlay -> onWatch || onCarPlay }.collect { onRemote ->
                 setForegroundServiceTimeoutMs(
-                    if (onWatch) WATCH_SESSION_FOREGROUND_MS else DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS,
+                    if (onRemote) WATCH_SESSION_FOREGROUND_MS else DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS,
                 )
             }
         }
@@ -7823,6 +7832,7 @@ class PlaybackService : MediaLibraryService() {
     override fun onDestroy() {
         WearBridge.attachStreams(null)
         WearBridge.releaseSpeaker()
+        CarPlayWebBridge.releaseSpeaker()
         // Let go of the receiver's player but leave its session alone: a
         // service that idles out while casting is not the listener choosing to
         // stop, and the next one picks the session up where it was.

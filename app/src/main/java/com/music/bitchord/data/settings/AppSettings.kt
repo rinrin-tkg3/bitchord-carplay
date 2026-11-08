@@ -619,6 +619,15 @@ object AppSettings {
      */
     val syncedLyrics = MutableStateFlow(true)
 
+    /** Keeps player transport/scrubber controls visible while the lyrics panel is open. */
+    val keepLyricsControlsVisible = MutableStateFlow(false)
+
+    /** Opens the full Now Playing player sheet immediately when tapping a song on the Home screen. */
+    val openPlayerOnHomeSongTap = MutableStateFlow(false)
+
+    /** Enables the local HTTP server for the iPhone 7 / Apple CarPlay Web Companion. */
+    val carPlayServerEnabled = MutableStateFlow(true)
+
     /** The databases [syncedLyrics] may ask. Empty is the same as off. */
     val lyricsSources = MutableStateFlow(LyricsSource.offered.toSet())
 
@@ -1074,6 +1083,9 @@ object AppSettings {
             )
         }.getOrDefault(LastPlayerScreen.MAIN)
         syncedLyrics.value = prefs.getBoolean(KEY_SYNCED_LYRICS, true)
+        keepLyricsControlsVisible.value = prefs.getBoolean(KEY_KEEP_LYRICS_CONTROLS_VISIBLE, false)
+        openPlayerOnHomeSongTap.value = prefs.getBoolean(KEY_OPEN_PLAYER_ON_HOME_SONG_TAP, false)
+        carPlayServerEnabled.value = prefs.getBoolean(KEY_CARPLAY_SERVER_ENABLED, true)
         lyricsSources.value = readLyricsSources()
         lyricsSourceOrder.value = readLyricsSourceOrder()
         prioritizeSyllableSync.value = prefs.getBoolean(KEY_PRIORITIZE_SYLLABLE_SYNC, false)
@@ -1667,6 +1679,21 @@ object AppSettings {
         setLyricsSources(LyricsSource.offered.toSet())
         setLyricsSourceOrder(LyricsSource.offered)
         setPrioritizeSyllableSync(false)
+    }
+
+    fun setKeepLyricsControlsVisible(value: Boolean) {
+        keepLyricsControlsVisible.value = value
+        prefs.edit().putBoolean(KEY_KEEP_LYRICS_CONTROLS_VISIBLE, value).apply()
+    }
+
+    fun setOpenPlayerOnHomeSongTap(value: Boolean) {
+        openPlayerOnHomeSongTap.value = value
+        prefs.edit().putBoolean(KEY_OPEN_PLAYER_ON_HOME_SONG_TAP, value).apply()
+    }
+
+    fun setCarPlayServerEnabled(value: Boolean) {
+        carPlayServerEnabled.value = value
+        prefs.edit().putBoolean(KEY_CARPLAY_SERVER_ENABLED, value).apply()
     }
 
     fun setAnimatedCanvas(value: Boolean) {
@@ -2324,6 +2351,9 @@ object AppSettings {
     private const val KEY_LEGACY_MESH_GRADIENT = "legacy_mesh_gradient"
     private const val KEY_LAST_PLAYER_SCREEN = "last_player_screen"
     private const val KEY_SYNCED_LYRICS = "synced_lyrics"
+    private const val KEY_KEEP_LYRICS_CONTROLS_VISIBLE = "keep_lyrics_controls_visible"
+    private const val KEY_OPEN_PLAYER_ON_HOME_SONG_TAP = "open_player_on_home_song_tap"
+    private const val KEY_CARPLAY_SERVER_ENABLED = "carplay_server_enabled"
     private const val KEY_LYRICS_SOURCES = "lyrics_sources"
     private const val KEY_LYRICS_SOURCES_SEEN = "lyrics_sources_seen"
     private const val KEY_LYRICS_SOURCE_ORDER = "lyrics_source_order"

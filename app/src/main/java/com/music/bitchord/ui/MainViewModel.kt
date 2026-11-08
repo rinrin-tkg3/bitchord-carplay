@@ -1711,7 +1711,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // out: it has its own skeleton at the head of the page rather than the
         // one at the tail.
         _homePendingShelves.value = 1 + YtMusicRepository.HOME_SUPPLEMENT_BROWSE_IDS.size
-        loadTopPicks(identity, rebuild = false)
         viewModelScope.launch {
             launch {
                 try {
@@ -1858,19 +1857,73 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun isCurrentHomeLoad(identity: String?, generation: Long) =
         identity == listenerKey() && generation == homeLoadGeneration.get()
 
+    private val notInterestedKeys: MutableSet<String> by lazy {
+        val file = File(getApplication<Application>().filesDir, "not_interested.txt")
+        runCatching {
+            if (file.exists()) file.readLines().filter { it.isNotBlank() }.toMutableSet()
+            else mutableSetOf()
+        }.getOrDefault(mutableSetOf())
+    }
+
+    private fun ShelfItem.isDismissed(): Boolean {
+        val keys = synchronized(notInterestedKeys) { notInterestedKeys.toSet() }
+        if (keys.isEmpty()) return false
+        if (videoId != null && "v:$videoId" in keys) return true
+        if (browseId != null && "b:$browseId" in keys) return true
+        if ("t:${title.trim()}" in keys) return true
+        return false
+    }
+
+    private fun List<HomeShelf>.withoutDismissed(): List<HomeShelf> =
+        mapNotNull { shelf ->
+            val filtered = shelf.items.filterNot { it.isDismissed() }
+            if (filtered.isEmpty()) null else shelf.copy(items = filtered)
+        }
+
+    fun markNotInterested(
+        videoId: String? = null,
+        browseId: String? = null,
+        title: String? = null,
+        feedbackToken: String? = null,
+    ) {
+        synchronized(notInterestedKeys) {
+            if (!videoId.isNullOrBlank()) notInterestedKeys.add("v:$videoId")
+            if (!browseId.isNullOrBlank()) notInterestedKeys.add("b:$browseId")
+            if (!title.isNullOrBlank()) notInterestedKeys.add("t:${title.trim()}")
+        }
+        val current = (_home.value as? UiState.Success)?.data
+        if (current != null) {
+            _home.value = UiState.Success(current.withoutDismissed())
+        }
+        val snapshot = synchronized(notInterestedKeys) { notInterestedKeys.joinToString("\n") }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                File(getApplication<Application>().filesDir, "not_interested.txt").writeText(snapshot)
+            }
+            if (!feedbackToken.isNullOrBlank()) {
+                runCatching { YtMusicRepository.removeFromHistory(feedbackToken) }
+                YtMusicRepository.invalidateHistoryCache()
+            }
+            if (!videoId.isNullOrBlank() && _signedIn.value) {
+                runCatching { YtMusicRepository.rate(videoId, LikeStatus.DISLIKE) }
+            }
+        }
+    }
+
     private fun publishHomeShelves(shelves: List<HomeShelf>, prepend: Boolean = false) {
+        val cleaned = shelves.withoutDismissed()
         val existing = (_home.value as? UiState.Success)?.data.orEmpty()
         if (prepend) {
             // YouTube's core home can also contain a stale "Recently played"
             // shelf. The dedicated history endpoint wins and replaces it.
-            val replacing = shelves.map { it.title.lowercase(Locale.ROOT) }.toSet()
+            val replacing = cleaned.map { it.title.lowercase(Locale.ROOT) }.toSet()
             homeSeenTitles.addAll(replacing)
-            _home.value = UiState.Success(shelves + existing.filterNot {
+            _home.value = UiState.Success(cleaned + existing.filterNot {
                 it.title.lowercase(Locale.ROOT) in replacing
             })
             return
         }
-        val added = shelves.withoutRepeatsOf(existing)
+        val added = cleaned.withoutRepeatsOf(existing)
             .filter { homeSeenTitles.add(it.title.lowercase(Locale.ROOT)) }
         if (added.isNotEmpty()) _home.value = UiState.Success(existing + added)
     }
@@ -1885,7 +1938,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (identity != listenerKey()) return@onSuccess
             homeContinuation = feed.continuation
             homeSeenTitles.clear()
-            val shelves = feed.shelves.withoutRepeatsOf(emptyList())
+            val shelves = feed.shelves.withoutDismissed().withoutRepeatsOf(emptyList())
                 .filter { homeSeenTitles.add(it.title.lowercase(Locale.ROOT)) }
             if (shelves.isNotEmpty()) _home.value = UiState.Success(shelves)
         }
@@ -1908,7 +1961,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             YtMusicRepository.moreHome(token).onSuccess { feed ->
                 if (identity == listenerKey()) {
                     val existing = (_home.value as? UiState.Success)?.data ?: emptyList()
-                    val added = feed.shelves.withoutRepeatsOf(existing)
+                    val added = feed.shelves.withoutDismissed().withoutRepeatsOf(existing)
                         .filter { homeSeenTitles.add(it.title.lowercase(Locale.ROOT)) }
                     // A page with nothing new signals the feed has looped back on
                     // itself rather than run dry with a token still attached —
