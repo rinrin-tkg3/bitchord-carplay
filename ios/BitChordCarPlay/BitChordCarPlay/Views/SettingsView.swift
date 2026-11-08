@@ -211,6 +211,9 @@ public struct SettingsView: View {
             .onChange(of: playback.serverHost) { newHost in
                 inputHost = newHost
             }
+            .onChange(of: playback.serverPort) { newPort in
+                inputPort = String(newPort)
+            }
         }
     }
 

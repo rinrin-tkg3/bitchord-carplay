@@ -106,8 +106,9 @@ object CarPlayWebServer {
             var boundSocket: ServerSocket? = null
             var chosenPort = preferredPort
 
-            // Attempt strict binding to preferredPort first with retry to handle rapid server reloads
-            for (attempt in 0..8) {
+            // Attempt strict binding to preferredPort (8765) first with persistent retries
+            // SO_REUSEADDR allows instant rebinding even after app restart or network toggle
+            for (attempt in 0..15) {
                 try {
                     val ss = ServerSocket()
                     ss.reuseAddress = true
@@ -116,15 +117,15 @@ object CarPlayWebServer {
                     chosenPort = preferredPort
                     break
                 } catch (e: Exception) {
-                    if (attempt < 8) {
-                        kotlinx.coroutines.delay(120L)
+                    if (attempt < 15) {
+                        kotlinx.coroutines.delay(150L)
                     }
                 }
             }
 
-            // Only fallback to another port if preferredPort is genuinely occupied by another app
+            // Only fallback to another port if preferredPort is genuinely occupied by another app after 2.5s
             if (boundSocket == null) {
-                for (candidate in (preferredPort + 1)..(preferredPort + 5)) {
+                for (candidate in (preferredPort + 1)..(preferredPort + 3)) {
                     try {
                         val ss = ServerSocket()
                         ss.reuseAddress = true
@@ -137,12 +138,12 @@ object CarPlayWebServer {
                 }
             }
             if (boundSocket == null) {
-                Log.e(TAG, "Could not bind CarPlayWebServer on ports $preferredPort..${preferredPort + 10}")
+                Log.e(TAG, "Could not bind CarPlayWebServer on port $preferredPort")
                 mainHandler.post { onState(preferredPort, false) }
                 return@launch
             }
             serverSocket = boundSocket
-            Log.i(TAG, "CarPlayWebServer listening on 0.0.0.0:$chosenPort")
+            Log.i(TAG, "CarPlayWebServer listening strictly on 0.0.0.0:$chosenPort")
             mainHandler.post { onState(chosenPort, true) }
 
             try {

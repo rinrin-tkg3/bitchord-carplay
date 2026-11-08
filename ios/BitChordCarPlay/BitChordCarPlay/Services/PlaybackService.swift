@@ -347,7 +347,7 @@ public class PlaybackService: NSObject, ObservableObject {
         nextTrack()
     }
 
-    // MARK: - Auto-Discovery of Galaxy BitChord Host
+    // MARK: - Auto-Discovery of Galaxy BitChord Host (Multi-IP & Multi-Port)
     public func triggerAutoDiscovery() {
         guard !isDiscovering else { return }
         isDiscovering = true
@@ -357,9 +357,10 @@ public class PlaybackService: NSObject, ObservableObject {
         if !serverHost.isEmpty {
             candidates.append(serverHost)
         }
-        // Common tethering / mobile hotspot gateways
+        // Common tethering / mobile hotspot gateways and local Wi-Fi IPs
         candidates.append("192.168.43.1") // Android Hotspot default IP
         candidates.append("10.207.211.165") // User's known IP
+        candidates.append("192.168.49.1") // BitChord Local Direct Wi-Fi IP
         candidates.append("172.20.10.1")  // iPhone Hotspot gateway
         candidates.append("172.20.10.2")
         candidates.append("192.168.1.1")
@@ -367,35 +368,47 @@ public class PlaybackService: NSObject, ObservableObject {
         candidates.append("192.168.11.15")
 
         let uniqueCandidates = Array(NSOrderedSet(array: candidates)) as! [String]
+
+        // Scan candidate ports (8765, 8766, 8767, etc.) so port changes are automatically tracked!
+        var candidatePorts = [8765, 8766, 8767]
+        if !candidatePorts.contains(serverPort) {
+            candidatePorts.insert(serverPort, at: 0)
+        }
+
         let group = DispatchGroup()
         var foundIp: String? = nil
+        var foundPort: Int? = nil
 
         for ip in uniqueCandidates {
-            guard let url = URL(string: "http://\(ip):\(serverPort)/api/state?cid=autodiscover") else { continue }
-            var req = URLRequest(url: url)
-            req.timeoutInterval = 1.2
-            req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            for port in candidatePorts {
+                guard let url = URL(string: "http://\(ip):\(port)/api/state?cid=autodiscover") else { continue }
+                var req = URLRequest(url: url)
+                req.timeoutInterval = 1.2
+                req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
 
-            group.enter()
-            URLSession.shared.dataTask(with: req) { data, response, error in
-                defer { group.leave() }
-                if let http = response as? HTTPURLResponse, http.statusCode == 200, data != nil {
-                    if foundIp == nil {
-                        foundIp = ip
+                group.enter()
+                URLSession.shared.dataTask(with: req) { data, response, error in
+                    defer { group.leave() }
+                    if let http = response as? HTTPURLResponse, http.statusCode == 200, data != nil {
+                        if foundIp == nil {
+                            foundIp = ip
+                            foundPort = port
+                        }
                     }
-                }
-            }.resume()
+                }.resume()
+            }
         }
 
         group.notify(queue: .main) { [weak self] in
             guard let self = self else { return }
             self.isDiscovering = false
-            if let ip = foundIp {
+            if let ip = foundIp, let port = foundPort {
                 self.serverHost = ip
+                self.serverPort = port
                 self.isConnected = true
-                self.discoveryStatusText = "Galaxy発見 (\(ip))"
+                self.discoveryStatusText = "Galaxy発見 (\(ip):\(port))"
                 self.fetchState()
-                print("[PlaybackService] Auto-discovery succeeded: \(ip)")
+                print("[PlaybackService] Auto-discovery succeeded: \(ip):\(port)")
             } else {
                 self.discoveryStatusText = "Galaxy未検出"
             }
