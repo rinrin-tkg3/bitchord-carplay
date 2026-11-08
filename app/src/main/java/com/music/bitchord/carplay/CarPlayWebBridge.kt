@@ -1240,6 +1240,7 @@ internal class CarPlayWebSpeaker(
         commandSeq++
         sink?.onRemotePlaybackChanged()
         onChanged()
+        CarPlayWebBridge.updatePlaybackSnapshot()
     }
 
     override fun setVolume(fraction: Float) {
@@ -1476,7 +1477,7 @@ internal class CarPlayWebSpeaker(
     }
 
     private companion object {
-        const val SEEK_GRACE_MS = 1_500L
+        const val SEEK_GRACE_MS = 2_500L
     }
 }
 

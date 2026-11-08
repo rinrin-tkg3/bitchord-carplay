@@ -196,15 +196,11 @@ public class PlaybackService: NSObject, ObservableObject {
         }
 
         // Remote Seek occurred from Android host
-        if let seekSeq = newState.seekSeq, seekSeq != self.lastAppliedSeekSeq {
+        if let seekSeq = newState.seekSeq, seekSeq > self.lastAppliedSeekSeq {
             self.lastAppliedSeekSeq = seekSeq
-            // Ignore echo if user just locally seeked
-            let recentlySeekedLocally = Date().timeIntervalSince(self.lastUserActionTime) < 1.5
-            if !recentlySeekedLocally && !self.isSeekingLocally {
-                let targetMs = newState.wantedSeekMs ?? newState.positionMs
-                if isRoutedToIphone {
-                    seekTo(positionMs: targetMs, notifyHost: false)
-                }
+            let targetMs = newState.wantedSeekMs ?? newState.positionMs
+            if isRoutedToIphone {
+                seekTo(positionMs: targetMs, notifyHost: false)
             }
         }
 
@@ -490,6 +486,7 @@ public class PlaybackService: NSObject, ObservableObject {
         }
         if notifyHost {
             self.lastUserActionTime = Date()
+            self.lastAppliedSeekSeq += 1
             sendAction("seek", params: ["positionMs": positionMs])
         }
     }
