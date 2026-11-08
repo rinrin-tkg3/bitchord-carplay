@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import MediaPlayer
 import Combine
+import Network
 
 public class PlaybackService: NSObject, ObservableObject {
     public static let shared = PlaybackService()
@@ -347,78 +348,42 @@ public class PlaybackService: NSObject, ObservableObject {
         nextTrack()
     }
 
-    // MARK: - Auto-Discovery of Galaxy BitChord Host (Multi-IP, Dynamic Subnet & UDP Beacon)
-    private func getLocalInterfaceIPs() -> [String] {
-        var addresses = [String]()
-        var ifaddr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddr) == 0, let firstAddr = ifaddr else { return [] }
-        defer { freeifaddrs(ifaddr) }
+    // MARK: - Auto-Discovery of Galaxy BitChord Host (mDNS, Bonjour & Multi-Subnet Probing)
+    private var bonjourBrowser: NWBrowser?
 
-        for ptr in sequence(first: firstAddr, by: { $0.pointee.ifa_next }) {
-            let addr = ptr.pointee.ifa_addr.pointee
-            if addr.sa_family == UInt8(AF_INET) {
-                var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                if getnameinfo(ptr.pointee.ifa_addr, socklen_t(addr.sa_len), &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST) == 0 {
-                    let ip = String(cString: hostname)
-                    if !ip.isEmpty && ip != "127.0.0.1" && !ip.hasPrefix("169.254.") {
-                        addresses.append(ip)
-                    }
-                }
-            }
-        }
-        return addresses
-    }
+    private func startBonjourBrowser(onFound: @escaping (String, Int) -> Void) {
+        let descriptor = NWBrowser.Descriptor.bonjour(type: "_http._tcp", domain: nil)
+        let browser = NWBrowser(for: descriptor, using: .tcp)
+        self.bonjourBrowser = browser
 
-    private func sendUdpDiscovery(port: Int, onFound: @escaping (String, Int) -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
-            guard fd >= 0 else { return }
-            defer { close(fd) }
-
-            var broadcastEnable: Int32 = 1
-            setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, socklen_t(MemoryLayout<Int32>.size))
-
-            var tv = timeval(tv_sec: 1, tv_usec: 0)
-            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
-
-            var addr = sockaddr_in()
-            addr.sin_family = sa_family_t(AF_INET)
-            addr.sin_port = in_port_t(UInt16(port).bigEndian)
-            addr.sin_addr.s_addr = INADDR_BROADCAST
-
-            let msg = "DISCOVER_BITCHORD"
-            let msgBytes = msg.utf8CString
-            _ = msgBytes.withUnsafeBytes { raw in
-                withUnsafePointer(to: &addr) { addrPtr in
-                    addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                        _ = sendto(fd, raw.baseAddress, raw.count, 0, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
-                    }
-                }
-            }
-
-            var senderAddr = sockaddr_in()
-            var senderLen = socklen_t(MemoryLayout<sockaddr_in>.size)
-            var buf = [UInt8](repeating: 0, count: 256)
-
-            let n = withUnsafeMutablePointer(to: &senderAddr) { addrPtr in
-                addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                    recvfrom(fd, &buf, buf.count, 0, sa, &senderLen)
-                }
-            }
-
-            if n > 0 {
-                var hostBuf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                let saPtr = withUnsafePointer(to: &senderAddr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { $0 } }
-                if getnameinfo(saPtr, senderLen, &hostBuf, socklen_t(hostBuf.count), nil, 0, NI_NUMERICHOST) == 0 {
-                    let foundIp = String(cString: hostBuf)
-                    if !foundIp.isEmpty && foundIp != "127.0.0.1" {
-                        DispatchQueue.main.async {
-                            onFound(foundIp, port)
+        browser.browseResultsChangedHandler = { results, _ in
+            for result in results {
+                if case let .service(name, _, _, _) = result.endpoint {
+                    if name.lowercased().contains("bitchord") {
+                        let conn = NWConnection(to: result.endpoint, using: .tcp)
+                        conn.stateUpdateHandler = { state in
+                            if case .ready = state, let remote = conn.currentPath?.remoteEndpoint {
+                                if case let .hostPort(host, port) = remote {
+                                    let hostStr: String
+                                    switch host {
+                                    case .ipv4(let ip): hostStr = "\(ip)"
+                                    case .name(let n, _): hostStr = n
+                                    default: hostStr = ""
+                                    }
+                                    if !hostStr.isEmpty {
+                                        DispatchQueue.main.async {
+                                            onFound(hostStr, Int(port.rawValue))
+                                        }
+                                    }
+                                }
+                            }
                         }
+                        conn.start(queue: .global())
                     }
                 }
             }
         }
+        browser.start(queue: .global())
     }
 
     public func triggerAutoDiscovery() {
@@ -429,12 +394,22 @@ public class PlaybackService: NSObject, ObservableObject {
         var candidates: [String] = []
         if !serverHost.isEmpty {
             candidates.append(serverHost)
+            let parts = serverHost.split(separator: ".")
+            if parts.count == 4 {
+                let prefix = "\(parts[0]).\(parts[1]).\(parts[2])"
+                candidates.append("\(prefix).1")
+                candidates.append("\(prefix).194")
+                candidates.append("\(prefix).2")
+                candidates.append("\(prefix).100")
+            }
         }
         // mDNS & User's known IPs
         candidates.append("bitchord.local")
         candidates.append("10.117.79.194")
+        candidates.append("10.117.79.1")
         candidates.append("192.168.43.1")
         candidates.append("10.207.211.165")
+        candidates.append("10.207.211.1")
         candidates.append("192.168.49.1")
         candidates.append("172.20.10.1")
         candidates.append("172.20.10.2")
@@ -442,22 +417,9 @@ public class PlaybackService: NSObject, ObservableObject {
         candidates.append("192.168.11.1")
         candidates.append("192.168.11.15")
 
-        // Dynamically discover subnet IPs from iPhone's own active interfaces
-        let localIPs = getLocalInterfaceIPs()
-        for localIp in localIPs {
-            let parts = localIp.split(separator: ".")
-            if parts.count == 4 {
-                let prefix = "\(parts[0]).\(parts[1]).\(parts[2])"
-                candidates.append("\(prefix).1")   // Default Gateway / Hotspot Host
-                candidates.append("\(prefix).194") // Known Galaxy DHCP IP
-                candidates.append("\(prefix).2")
-                candidates.append("\(prefix).100")
-            }
-        }
-
         let uniqueCandidates = Array(NSOrderedSet(array: candidates)) as! [String]
 
-        // Scan candidate ports (8765, 8766, 8767, etc.)
+        // Scan candidate ports (8765, 8766, 8767)
         var candidatePorts = [8765, 8766, 8767]
         if !candidatePorts.contains(serverPort) {
             candidatePorts.insert(serverPort, at: 0)
@@ -467,18 +429,16 @@ public class PlaybackService: NSObject, ObservableObject {
         var foundIp: String? = nil
         var foundPort: Int? = nil
 
-        // 1. Fast UDP Broadcast Beacon probe
-        for port in candidatePorts {
-            sendUdpDiscovery(port: port) { [weak self] ip, p in
-                guard let self = self, self.isDiscovering else { return }
-                self.serverHost = ip
-                self.serverPort = p
-                self.isConnected = true
-                self.isDiscovering = false
-                self.discoveryStatusText = "Galaxy発見 (\(ip):\(p))"
-                self.fetchState()
-                print("[PlaybackService] UDP Discovery succeeded: \(ip):\(p)")
-            }
+        // 1. Bonjour (mDNS) discovery in background
+        startBonjourBrowser { [weak self] ip, p in
+            guard let self = self, self.isDiscovering else { return }
+            self.serverHost = ip
+            self.serverPort = p
+            self.isConnected = true
+            self.isDiscovering = false
+            self.discoveryStatusText = "Galaxy発見 (\(ip):\(p))"
+            self.fetchState()
+            print("[PlaybackService] Bonjour Discovery succeeded: \(ip):\(p)")
         }
 
         // 2. Parallel HTTP probing across candidate IPs & Ports
@@ -504,7 +464,7 @@ public class PlaybackService: NSObject, ObservableObject {
 
         group.notify(queue: .main) { [weak self] in
             guard let self = self else { return }
-            if !self.isDiscovering { return } // Already resolved via UDP
+            if !self.isDiscovering { return } // Already resolved via Bonjour
             self.isDiscovering = false
             if let ip = foundIp, let port = foundPort {
                 self.serverHost = ip
