@@ -984,6 +984,7 @@ object CarPlayWebServer {
             val positionMs = json.optLong("positionMs", 0L)
             val durationMs = json.optLong("durationMs", 0L)
             val ended = json.optBoolean("ended", false)
+            val seekSeq = json.optLong("seekSeq", -1L)
             mainHandler.post {
                 CarPlayWebBridge.speaker?.onClientReport(
                     mediaId = mediaId,
@@ -992,6 +993,7 @@ object CarPlayWebServer {
                     positionMs = positionMs,
                     durationMs = durationMs,
                     ended = ended,
+                    clientSeekSeq = seekSeq,
                 )
             }
         } catch (_: Exception) {

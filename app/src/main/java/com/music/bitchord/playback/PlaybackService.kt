@@ -8330,7 +8330,7 @@ class PlaybackService : MediaLibraryService() {
                 C.INDEX_UNSET,
             )
             listeners.forEach {
-                it.onPositionDiscontinuity(position, position, Player.DISCONTINUITY_REASON_INTERNAL)
+                it.onPositionDiscontinuity(position, position, Player.DISCONTINUITY_REASON_SEEK)
             }
             val events = Player.Events(flags.build())
             listeners.forEach { it.onEvents(this, events) }

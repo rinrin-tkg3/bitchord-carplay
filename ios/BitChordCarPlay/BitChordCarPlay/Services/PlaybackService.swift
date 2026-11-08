@@ -186,8 +186,11 @@ public class PlaybackService: NSObject, ObservableObject {
             }
         }
 
-        // Track changed
-        if prev?.mediaId != newState.mediaId, let newId = newState.mediaId {
+        // Track changed or routing switched to iPhone while player not ready
+        let routingSwitchedToIphone = (prev?.activeOnIphone != true && isRoutedToIphone)
+        let trackChanged = (prev?.mediaId != newState.mediaId)
+        let needsLoad = trackChanged || (isRoutedToIphone && (player == nil || player?.currentItem == nil || currentLoadedMediaId != newState.mediaId))
+        if needsLoad, let newId = newState.mediaId {
             if isRoutedToIphone {
                 loadAndPlayTrack(videoId: newId, startPositionMs: newState.positionMs)
             } else {
@@ -201,6 +204,7 @@ public class PlaybackService: NSObject, ObservableObject {
             let targetMs = newState.wantedSeekMs ?? newState.positionMs
             if isRoutedToIphone {
                 seekTo(positionMs: targetMs, notifyHost: false)
+                reportPlaybackToHost()
             }
         }
 
@@ -481,13 +485,18 @@ public class PlaybackService: NSObject, ObservableObject {
         self.currentPositionSec = sec
         self.isSeekingLocally = true
         let time = CMTime(seconds: sec, preferredTimescale: 600)
-        player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-            self?.isSeekingLocally = false
+        if let p = player, p.currentItem != nil {
+            p.seek(to: time) { [weak self] _ in
+                self?.isSeekingLocally = false
+            }
+        } else {
+            self.isSeekingLocally = false
         }
         if notifyHost {
             self.lastUserActionTime = Date()
             self.lastAppliedSeekSeq += 1
             sendAction("seek", params: ["positionMs": positionMs])
+            reportPlaybackToHost()
         }
     }
 
@@ -542,7 +551,8 @@ public class PlaybackService: NSObject, ObservableObject {
             "buffering": isBuffering,
             "positionMs": Int64(currentPositionSec * 1000),
             "durationMs": Int64(durationSec * 1000),
-            "ended": ended
+            "ended": ended,
+            "seekSeq": self.lastAppliedSeekSeq
         ]
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
