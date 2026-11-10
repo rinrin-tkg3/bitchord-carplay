@@ -372,7 +372,8 @@ public class PlaybackService: NSObject, ObservableObject {
     }
 
     private func getNextTrackVideoId() -> String? {
-        guard let q = queue, !q.isEmpty else { return nil }
+        guard !queue.isEmpty else { return nil }
+        let q = queue
         let currentIdx = state?.currentIndex ?? 0
         if let next = q.first(where: { $0.index == currentIdx + 1 }) {
             return next.videoId
