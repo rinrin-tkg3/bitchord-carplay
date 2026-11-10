@@ -71,9 +71,41 @@ internal fun wordsFromRuns(runs: List<TimedRun>, spacingIsExplicit: Boolean = fa
 }
 
 /** Scripts written without spaces between words. */
-private fun Char.isUnspacedScript(): Boolean =
+internal fun Char.isUnspacedScript(): Boolean =
     this in '\u3400'..'\u9FFF' || // Han
         this in '\u3040'..'\u30FF' || // hiragana and katakana
         this in '\u3000'..'\u303F' || // CJK punctuation
         this in '\uFF00'..'\uFFEF' || // full-width forms
         this in '\u0E00'..'\u0E7F' // Thai
+
+/** Removes ASCII spaces that are sandwiched between two unspaced (CJK / Thai) characters. */
+internal fun String.removeUnspacedSpaces(): String {
+    if (isEmpty()) return this
+    return replace(UNSPACED_SPACE_REGEX, "")
+}
+
+private val UNSPACED_SPACE_REGEX = Regex(
+    """(?<=[\u3400-\u9FFF\u3040-\u30FF\u3000-\u303F\uFF00-\uFFEF\u0E00-\u0E7F])\x20+(?=[\u3400-\u9FFF\u3040-\u30FF\u3000-\u303F\uFF00-\uFFEF\u0E00-\u0E7F])"""
+)
+
+/** Joins timed runs/words into display text, keeping spaces only where appropriate for the script. */
+internal fun List<LyricWord>.toSpacedText(): String {
+    if (isEmpty()) return ""
+    val sb = StringBuilder()
+    for (i in indices) {
+        val w = this[i]
+        sb.append(w.text)
+        if (i < lastIndex) {
+            val next = this[i + 1]
+            val lastChar = w.text.lastOrNull()
+            val nextChar = next.text.firstOrNull()
+            if (lastChar != null && nextChar != null && lastChar.isUnspacedScript() && nextChar.isUnspacedScript()) {
+                // No space between CJK / unspaced characters
+            } else {
+                sb.append(' ')
+            }
+        }
+    }
+    return sb.toString().removeUnspacedSpaces()
+}
+

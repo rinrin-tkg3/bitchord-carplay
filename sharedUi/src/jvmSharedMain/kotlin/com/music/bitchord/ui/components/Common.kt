@@ -797,13 +797,30 @@ fun SearchPlayingBars(modifier: Modifier = Modifier) {
 @Composable
 fun DownloadedBadge(videoId: String, tint: Color, modifier: Modifier = Modifier) {
     if (videoId !in AppUi.host.downloadedIds()) return
+    val isAuto = videoId in AppUi.host.autoDownloadedIds()
     Spacer(Modifier.width(8.dp))
-    Icon(
-        Icons.Rounded.DownloadDone,
-        contentDescription = stringResource(Res.string.downloaded),
-        tint = tint,
-        modifier = modifier.size(16.dp),
-    )
+    if (isAuto) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = modifier
+                .clip(RoundedCornerShape(4.dp))
+                .background(tint.copy(alpha = 0.18f))
+                .padding(horizontal = 5.dp, vertical = 2.dp),
+        ) {
+            Text(
+                text = "⚡Auto",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = tint,
+            )
+        }
+    } else {
+        Icon(
+            Icons.Rounded.DownloadDone,
+            contentDescription = stringResource(Res.string.downloaded),
+            tint = tint,
+            modifier = modifier.size(16.dp),
+        )
+    }
 }
 
 /**

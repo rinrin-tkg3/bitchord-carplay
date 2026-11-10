@@ -17,6 +17,7 @@ public struct BitChordState: Codable {
     public var wantedSeekMs: Int64?
     public var queue: [QueueSongItem]?
     public var currentIndex: Int?
+    public var isAutoDownloaded: Boolean?
 
     enum CodingKeys: String, CodingKey {
         case activeOnIphone
@@ -35,6 +36,7 @@ public struct BitChordState: Codable {
         case wantedSeekMs
         case queue
         case currentIndex
+        case isAutoDownloaded
     }
 }
 

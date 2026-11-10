@@ -96,10 +96,26 @@ public struct NowPlayingView: View {
                                 .lineLimit(1)
                                 .multilineTextAlignment(.center)
 
-                            Text(playback.state?.artist.isEmpty == false ? playback.state!.artist : "BitChord Host")
-                                .font(.system(size: isCompact ? 13 : 15, weight: .medium))
-                                .foregroundColor(.gray)
-                                .lineLimit(1)
+                            HStack(spacing: 6) {
+                                Text(playback.state?.artist.isEmpty == false ? playback.state!.artist : "BitChord Host")
+                                    .font(.system(size: isCompact ? 13 : 15, weight: .medium))
+                                    .foregroundColor(.gray)
+                                    .lineLimit(1)
+
+                                if playback.state?.isAutoDownloaded == true {
+                                    HStack(spacing: 2) {
+                                        Image(systemName: "bolt.fill")
+                                            .font(.system(size: 8, weight: .bold))
+                                        Text("Auto")
+                                            .font(.system(size: 9, weight: .bold))
+                                    }
+                                    .foregroundColor(.green)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(Color.green.opacity(0.18))
+                                    .cornerRadius(4)
+                                }
+                            }
 
                             if let album = playback.state?.album, !album.isEmpty {
                                 Text(album)

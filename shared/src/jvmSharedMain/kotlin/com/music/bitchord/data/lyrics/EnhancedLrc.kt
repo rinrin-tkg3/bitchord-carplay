@@ -55,7 +55,7 @@ object EnhancedLrc {
             if (words.isEmpty()) return@mapIndexedNotNull null
             LyricLine(
                 timeMs = minOf(row.timeMs, words.first().startMs),
-                text = words.joinToString(" ") { it.text },
+                text = words.toSpacedText(),
                 words = words,
             )
         }.withInstrumentalGaps()

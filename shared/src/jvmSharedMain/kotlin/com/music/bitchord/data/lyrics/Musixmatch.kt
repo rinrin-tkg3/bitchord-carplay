@@ -179,7 +179,7 @@ object Musixmatch {
             }
             val words = wordsFromRuns(runs, spacingIsExplicit = true)
 
-            val text = entry.text.trim().ifEmpty { words.joinToString(" ") { it.text } }
+            val text = entry.text.trim().removeUnspacedSpaces().ifEmpty { words.toSpacedText() }
             if (text.isEmpty()) return@mapNotNull null
             LyricLine(
                 timeMs = minOf(lineStart, words.firstOrNull()?.startMs ?: lineStart),

@@ -117,7 +117,14 @@ private fun LyricLine.enhancedBody(): String {
                 previous = start
             }
         }
-        if (index != runs.lastIndex) out.append(' ')
+        if (index != runs.lastIndex) {
+            val nextWord = runs[index + 1]
+            val lastChar = word.text.lastOrNull()
+            val nextChar = nextWord.text.firstOrNull()
+            if (lastChar == null || nextChar == null || !lastChar.isUnspacedScript() || !nextChar.isUnspacedScript()) {
+                out.append(' ')
+            }
+        }
     }
     // A line that is one split word has no space in it anywhere, and a line
     // with none is read back as one word per stamp; the space before the

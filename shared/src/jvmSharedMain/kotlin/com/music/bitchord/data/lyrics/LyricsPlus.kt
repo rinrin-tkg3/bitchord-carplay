@@ -111,7 +111,7 @@ object LyricsPlus {
             val built = when {
                 words.isNotEmpty() -> LyricLine(
                     timeMs = minOf(start, words.first().startMs),
-                    text = words.joinToString(" ") { it.text },
+                    text = words.toSpacedText(),
                     words = words,
                 )
                 // Some sources are only line-synced; still worth showing.

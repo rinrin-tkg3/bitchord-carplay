@@ -442,6 +442,7 @@ fun SettingsScreen(
     }
     var showListenBrainzTokenDialog by remember { mutableStateOf(false) }
     var showLastfmLoginDialog by remember { mutableStateOf(false) }
+    var showSmartAutoDownloadSheet by remember { mutableStateOf(false) }
     val scrobbleScope = rememberCoroutineScope()
 
     val version = remember(context) {
@@ -713,13 +714,21 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.sync_downloaded_playlists_subtitle),
                 )
             }
-            val autoDownloadFavoritesTitle = "よく聴く曲をWi-Fi時に自動ダウンロード"
-            row(autoDownloadFavoritesTitle, "auto download", "favorites", "wifi", "offline", "data saver") {
-                SettingsSubRow(
-                    title = autoDownloadFavoritesTitle,
-                    checked = autoDownloadFavorites,
-                    onCheckedChange = AppSettings::setAutoDownloadFavorites,
-                    subtitle = "お気に入りや再生頻度の高い曲をWi-Fi接続時に自動保存し、どこから再生しても通信量を抑えます",
+            val autoDownloadTitle = "スマート自動ダウンロード"
+            val autoDownloadTarget by AppSettings.autoDownloadTarget.collectAsStateWithLifecycle()
+            val autoDownloadQuality by AppSettings.autoDownloadQuality.collectAsStateWithLifecycle()
+            val autoDownloadMaxSongs by AppSettings.autoDownloadMaxSongs.collectAsStateWithLifecycle()
+            row(autoDownloadTitle, "auto download", "smart", "wifi", "offline", "data saver") {
+                SettingsRow(
+                    icon = Icons.Rounded.AutoAwesome,
+                    title = autoDownloadTitle,
+                    subtitle = if (autoDownloadFavorites) {
+                        "${autoDownloadTarget.label} · 最大${autoDownloadMaxSongs}曲 · ${autoDownloadQuality.label}"
+                    } else {
+                        "オフ (無効)"
+                    },
+                    value = if (autoDownloadFavorites) "詳細設定" else "オフ",
+                    onClick = { showSmartAutoDownloadSheet = true },
                 )
             }
         }

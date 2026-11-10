@@ -411,6 +411,7 @@ object Downloads {
 
     private fun forget(videoId: String) {
         record(saved = { it - videoId }, meta = { it - videoId })
+        AutoDownloadManager.onDownloadDeleted(videoId)
     }
 
     /**
@@ -718,6 +719,7 @@ object Downloads {
                 it + mapOf(asked.videoId to metaAsked, fetched.videoId to metaFetched)
             },
         )
+        AutoDownloadManager.onDownloadCompleted(ids)
     }
 
     /**
@@ -1002,7 +1004,7 @@ object Downloads {
         // which rung they are fetching, and re-reading the setting per call
         // would let a change made mid-download splice two renditions into
         // one file.
-        val quality = AppSettings.downloadQuality.value
+        val quality = AutoDownloadManager.effectiveDownloadQualityFor(song.videoId)
 
         // Asked before the lookup rather than after it, unlike the check on the
         // route's own filename below. A file already sitting in Music under a

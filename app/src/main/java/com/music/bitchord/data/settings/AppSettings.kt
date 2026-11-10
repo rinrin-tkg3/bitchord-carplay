@@ -102,6 +102,19 @@ enum class BitPerfectMode {
  * [LOSSLESS] has no streaming counterpart at all: it is the only rung that lets
  * a configured source's bit-exact file end up as a file on disk.
  */
+enum class AutoDownloadTarget(val label: String) {
+    BOTH("お気に入り & よく聴く曲"),
+    LIKED_ONLY("お気に入りの曲のみ"),
+    TOP_PLAYED_ONLY("再生回数が多い曲のみ"),
+}
+
+enum class AutoDownloadQuality(val label: String, val detail: String) {
+    MATCH_DOWNLOAD("ダウンロード音質に合わせる", "通常のダウンロード設定を使用"),
+    LOSSLESS("ロスレス", "FLAC / 最高音質 (~35 MB/曲)"),
+    HIGH("高音質", "高音質 (~8 MB/曲)"),
+    STANDARD("標準", "標準画質 (~4 MB/曲)"),
+}
+
 enum class DownloadQuality(
     /** Ceiling for the YouTube Opus ladder. [Int.MAX_VALUE] means "whichever rung is best". */
     val maxKbps: Int,
@@ -254,6 +267,11 @@ object AppSettings {
     /** Automatically download frequently played and liked songs when on Wi-Fi. */
     val autoDownloadFavorites = MutableStateFlow(true)
     val autoDownloadMaxSongs = MutableStateFlow(30)
+    val autoDownloadTarget = MutableStateFlow(AutoDownloadTarget.BOTH)
+    val autoDownloadQuality = MutableStateFlow(AutoDownloadQuality.MATCH_DOWNLOAD)
+    val autoDownloadMaxStorageMb = MutableStateFlow(2000)
+    val autoDownloadOnlyWhenCharging = MutableStateFlow(false)
+    val autoDownloadWifiOnly = MutableStateFlow(true)
 
     /** Whether the active network charges for data. `null` while offline. */
     val meteredConnection = MutableStateFlow<Boolean?>(null)
@@ -988,6 +1006,11 @@ object AppSettings {
         syncDownloadedPlaylists.value = prefs.getBoolean(KEY_SYNC_DOWNLOADED_PLAYLISTS, false)
         autoDownloadFavorites.value = prefs.getBoolean(KEY_AUTO_DOWNLOAD_FAVORITES, true)
         autoDownloadMaxSongs.value = prefs.getInt(KEY_AUTO_DOWNLOAD_MAX_SONGS, 30)
+        autoDownloadTarget.value = readAutoDownloadTarget()
+        autoDownloadQuality.value = readAutoDownloadQuality()
+        autoDownloadMaxStorageMb.value = prefs.getInt(KEY_AUTO_DOWNLOAD_MAX_STORAGE_MB, 2000)
+        autoDownloadOnlyWhenCharging.value = prefs.getBoolean(KEY_AUTO_DOWNLOAD_ONLY_CHARGING, false)
+        autoDownloadWifiOnly.value = prefs.getBoolean(KEY_AUTO_DOWNLOAD_WIFI_ONLY, true)
         crossfadeSeconds.value = prefs.getInt(KEY_CROSSFADE, 0)
         smartFadeEnabled.value = prefs.getBoolean(KEY_SMART_FADE, false)
         automixPerformanceMode.value = runCatching {
@@ -1240,6 +1263,16 @@ object AppSettings {
         // on; LOSSLESS is what that produced for all but the few installs that
         // had turned it off, and is the default a fresh install gets anyway.
         prefs.edit().putString(KEY_QUALITY_DOWNLOAD, DownloadQuality.LOSSLESS.name).apply()
+    }
+
+    private fun readAutoDownloadTarget(): AutoDownloadTarget {
+        val raw = prefs.getString(KEY_AUTO_DOWNLOAD_TARGET, null) ?: return AutoDownloadTarget.BOTH
+        return runCatching { AutoDownloadTarget.valueOf(raw) }.getOrDefault(AutoDownloadTarget.BOTH)
+    }
+
+    private fun readAutoDownloadQuality(): AutoDownloadQuality {
+        val raw = prefs.getString(KEY_AUTO_DOWNLOAD_QUALITY, null) ?: return AutoDownloadQuality.MATCH_DOWNLOAD
+        return runCatching { AutoDownloadQuality.valueOf(raw) }.getOrDefault(AutoDownloadQuality.MATCH_DOWNLOAD)
     }
 
     private fun readDownloadQuality(): DownloadQuality {
@@ -1895,6 +1928,31 @@ object AppSettings {
         prefs.edit().putInt(KEY_AUTO_DOWNLOAD_MAX_SONGS, v).apply()
     }
 
+    fun setAutoDownloadTarget(value: AutoDownloadTarget) {
+        autoDownloadTarget.value = value
+        prefs.edit().putString(KEY_AUTO_DOWNLOAD_TARGET, value.name).apply()
+    }
+
+    fun setAutoDownloadQuality(value: AutoDownloadQuality) {
+        autoDownloadQuality.value = value
+        prefs.edit().putString(KEY_AUTO_DOWNLOAD_QUALITY, value.name).apply()
+    }
+
+    fun setAutoDownloadMaxStorageMb(value: Int) {
+        autoDownloadMaxStorageMb.value = value
+        prefs.edit().putInt(KEY_AUTO_DOWNLOAD_MAX_STORAGE_MB, value).apply()
+    }
+
+    fun setAutoDownloadOnlyWhenCharging(value: Boolean) {
+        autoDownloadOnlyWhenCharging.value = value
+        prefs.edit().putBoolean(KEY_AUTO_DOWNLOAD_ONLY_CHARGING, value).apply()
+    }
+
+    fun setAutoDownloadWifiOnly(value: Boolean) {
+        autoDownloadWifiOnly.value = value
+        prefs.edit().putBoolean(KEY_AUTO_DOWNLOAD_WIFI_ONLY, value).apply()
+    }
+
     fun setLastfmPrimaryArtistOnly(value: Boolean) {
         lastfmPrimaryArtistOnly.value = value
         prefs.edit().putBoolean(KEY_LASTFM_PRIMARY_ARTIST_ONLY, value).apply()
@@ -2315,6 +2373,11 @@ object AppSettings {
     private const val KEY_SYNC_DOWNLOADED_PLAYLISTS = "sync_downloaded_playlists"
     private const val KEY_AUTO_DOWNLOAD_FAVORITES = "auto_download_favorites"
     private const val KEY_AUTO_DOWNLOAD_MAX_SONGS = "auto_download_max_songs"
+    private const val KEY_AUTO_DOWNLOAD_TARGET = "auto_download_target"
+    private const val KEY_AUTO_DOWNLOAD_QUALITY = "auto_download_quality"
+    private const val KEY_AUTO_DOWNLOAD_MAX_STORAGE_MB = "auto_download_max_storage_mb"
+    private const val KEY_AUTO_DOWNLOAD_ONLY_CHARGING = "auto_download_only_charging"
+    private const val KEY_AUTO_DOWNLOAD_WIFI_ONLY = "auto_download_wifi_only"
     private const val KEY_CROSSFADE = "crossfade_seconds"
     private const val KEY_SMART_FADE = "smart_fade_enabled"
     private const val KEY_AUTOMIX_PERFORMANCE_MODE = "automix_performance_mode"

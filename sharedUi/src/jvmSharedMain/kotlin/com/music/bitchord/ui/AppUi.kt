@@ -27,6 +27,10 @@ interface AppUiHost {
     @Composable
     fun downloadedIds(): Set<String>
 
+    /** Video ids of the tracks automatically downloaded, for the smart mark on their rows. */
+    @Composable
+    fun autoDownloadedIds(): Set<String> = emptySet()
+
     /**
      * A release's motion cover, for Home's Top Picks — the same lookup the
      * album page makes. Null is the normal answer, and the only one where the

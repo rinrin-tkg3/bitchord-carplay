@@ -148,7 +148,7 @@ object TtmlLyrics {
         val backing = mergeIntoWords(backingPieces).takeIf { it.isNotEmpty() }?.let {
             LyricLine(
                 timeMs = it.first().startMs,
-                text = it.joinToString(" ") { word -> word.text },
+                text = it.toSpacedText(),
                 words = it,
             )
         }
@@ -173,7 +173,7 @@ object TtmlLyrics {
         val begin = time(paragraph.getAttribute("begin")) ?: words.first().startMs
         return LyricLine(
             timeMs = minOf(begin, words.first().startMs),
-            text = words.joinToString(" ") { it.text },
+            text = words.toSpacedText(),
             words = words,
             background = backing,
         )

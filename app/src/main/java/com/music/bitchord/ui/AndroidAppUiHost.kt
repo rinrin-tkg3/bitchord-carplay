@@ -23,6 +23,12 @@ object AndroidAppUiHost : AppUiHost {
         return saved.keys
     }
 
+    @Composable
+    override fun autoDownloadedIds(): Set<String> {
+        val autoIds by com.music.bitchord.download.AutoDownloadManager.autoDownloadedIds.collectAsStateWithLifecycle()
+        return autoIds
+    }
+
     override suspend fun releaseMotion(album: String, artist: String): CanvasArtwork? {
         if (!AppSettings.animatedCanvas.value || album.isBlank() || artist.isBlank()) return null
         return CanvasRepository.canvasForAlbum(album, artist)

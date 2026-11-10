@@ -708,6 +708,7 @@ object CarPlayWebServer {
         root.put("repeatMode", pb.repeatMode)
         root.put("currentIndex", pb.currentIndex)
         root.put("likeStatus", CarPlayWebBridge.currentLikeStatusSnapshot.name)
+        root.put("isAutoDownloaded", com.music.bitchord.download.AutoDownloadManager.isAutoDownloaded(pb.mediaId))
         root.put("themeMode", AppSettings.themeMode.value.name)
         root.put("liquidGlass", AppSettings.liquidGlass.value)
         root.put("keepLyricsControlsVisible", AppSettings.keepLyricsControlsVisible.value)

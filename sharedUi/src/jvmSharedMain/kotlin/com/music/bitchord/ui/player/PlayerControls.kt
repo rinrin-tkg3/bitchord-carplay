@@ -121,6 +121,7 @@ import com.music.bitchord.data.listentogether.PartyMember
 import com.music.bitchord.data.settings.TrackAnalysisState
 import com.music.bitchord.data.settings.AudioQuality
 import com.music.bitchord.data.model.Song
+import com.music.bitchord.ui.AppUi
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
@@ -338,28 +339,41 @@ internal fun PlaybackQualityLabel(
     val metered by PlayerSettings.meteredConnection.collectAsStateWithLifecycle()
     val ceilingOverride by PlayerSettings.streamCeilingOverride.collectAsStateWithLifecycle()
     val nerdStats by NerdStats.current.collectAsStateWithLifecycle()
-    // Whether this playback session is even asking for a lossless stream — the
-    // same computation SourceResolver.requestForNow() makes, mirrored here so
-    // "Loading lossless" only appears when a lossless fetch is actually in
-    // flight, not on every buffering YouTube track. Override included: while
-    // the watch caps the stream nothing lossless is being looked for.
     val chosenQuality = if (metered == true) cellularQuality else wifiQuality
     val effectiveQuality = ceilingOverride
         ?.takeIf { it.ordinal < chosenQuality.ordinal }
         ?: chosenQuality
-    // Whether a module is still racing YouTube for this exact track — see
-    // [NerdStats.racingLossless]. YouTube can win that race and already be
-    // playing while the module lookup is still running detached, and the badge
-    // should keep saying "loading" through that stretch rather than going
-    // blank only to possibly say "loading" again a moment later.
     val racingLossless by NerdStats.racingLossless.collectAsStateWithLifecycle()
-    LosslessOrStats(
-        isLoading = isLoading,
-        stillRacing = song.videoId in racingLossless,
-        losslessRequested = effectiveQuality == AudioQuality.LOSSLESS,
-        nerdStats = nerdStats,
+    val isAutoDownloaded = song.videoId in AppUi.host.autoDownloadedIds()
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
         modifier = modifier,
-    )
+    ) {
+        if (isAutoDownloaded) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = "⚡Auto DL",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Spacer(Modifier.width(6.dp))
+        }
+        LosslessOrStats(
+            isLoading = isLoading,
+            stillRacing = song.videoId in racingLossless,
+            losslessRequested = effectiveQuality == AudioQuality.LOSSLESS,
+            nerdStats = nerdStats,
+        )
+    }
 }
 
 /**

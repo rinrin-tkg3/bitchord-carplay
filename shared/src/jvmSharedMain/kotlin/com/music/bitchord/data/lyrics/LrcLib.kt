@@ -107,7 +107,7 @@ object LrcLib {
                 // and punctuation between two words belong to the line, and
                 // re-joining the words with single spaces would quietly rewrite
                 // a line that never had them.
-                text = text.replace(WORD_STAMP, "").trim(),
+                text = text.replace(WORD_STAMP, "").trim().removeUnspacedSpaces(),
                 words = parseWordRuns(text),
                 alignment = alignment,
             )
