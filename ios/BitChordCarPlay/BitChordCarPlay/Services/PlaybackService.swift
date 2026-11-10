@@ -18,6 +18,7 @@ public class PlaybackService: NSObject, ObservableObject {
     // User Intent & Optimistic Transport Lock (prevents ping-pong oscillation)
     @Published public var userWantsPlay: Bool = false
     @Published public var lastUserActionTime: Date = Date.distantPast
+    private var lastSkipActionTime: Date = Date.distantPast
 
     // CarPlay connection state and simulation mode
     @Published public var isCharging: Bool = false
@@ -602,12 +603,18 @@ public class PlaybackService: NSObject, ObservableObject {
     }
 
     public func nextTrack() {
-        self.lastUserActionTime = Date()
+        let now = Date()
+        guard now.timeIntervalSince(lastSkipActionTime) >= 0.35 else { return }
+        lastSkipActionTime = now
+        self.lastUserActionTime = now
         sendAction("next")
     }
 
     public func previousTrack() {
-        self.lastUserActionTime = Date()
+        let now = Date()
+        guard now.timeIntervalSince(lastSkipActionTime) >= 0.35 else { return }
+        lastSkipActionTime = now
+        self.lastUserActionTime = now
         sendAction("prev")
     }
 
@@ -654,19 +661,6 @@ public class PlaybackService: NSObject, ObservableObject {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
         URLSession.shared.dataTask(with: req).resume()
-
-        // Also hit /api/control with full params as backup for maximum compatibility
-        var controlQuery = "action=\(type)&cid=ios_carplay"
-        if let p = params {
-            for (k, v) in p {
-                controlQuery += "&\(k)=\(v)"
-            }
-        }
-        if let controlUrl = URL(string: "\(baseUrl)/api/control?\(controlQuery)") {
-            var cReq = URLRequest(url: controlUrl)
-            cReq.httpMethod = "POST"
-            URLSession.shared.dataTask(with: cReq).resume()
-        }
     }
 
     public func reportPlaybackToHost(ended: Bool = false) {

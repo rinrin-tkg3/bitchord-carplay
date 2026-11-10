@@ -68,6 +68,8 @@ object CarPlayWebServer {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile
+    private var lastSkipActionTime = 0L
 
     @Volatile
     private var serverSocket: ServerSocket? = null
@@ -1058,10 +1060,18 @@ object CarPlayWebServer {
                         controller?.onTogglePlay()
                     }
                     "next" -> {
-                        controller?.onNext()
+                        val now = System.currentTimeMillis()
+                        if (now - lastSkipActionTime >= 300L) {
+                            lastSkipActionTime = now
+                            controller?.onNext()
+                        }
                     }
                     "prev", "previous" -> {
-                        controller?.onPrevious()
+                        val now = System.currentTimeMillis()
+                        if (now - lastSkipActionTime >= 300L) {
+                            lastSkipActionTime = now
+                            controller?.onPrevious()
+                        }
                     }
                     "seek" -> {
                         val pos = when {
