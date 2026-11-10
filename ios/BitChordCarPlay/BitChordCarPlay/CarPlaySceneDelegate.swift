@@ -14,6 +14,12 @@ public class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelega
         CarPlaySceneDelegate.shared = self
     }
 
+    public func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        CarPlaySceneDelegate.shared = self
+        print("[CarPlaySceneDelegate] scene willConnectTo session: \(session.role.rawValue)")
+        PlaybackService.shared.updateCarPlayConnectionStatus()
+    }
+
     public func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene, didConnect interfaceController: CPInterfaceController) {
         self.interfaceController = interfaceController
         CarPlaySceneDelegate.shared = self
