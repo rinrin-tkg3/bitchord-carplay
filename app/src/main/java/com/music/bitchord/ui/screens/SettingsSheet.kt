@@ -285,6 +285,7 @@ fun SettingsScreen(
     val wifiOnlyDownloads by AppSettings.wifiOnlyDownloads.collectAsStateWithLifecycle()
     val exportDownloads by AppSettings.exportDownloads.collectAsStateWithLifecycle()
     val syncDownloadedPlaylists by AppSettings.syncDownloadedPlaylists.collectAsStateWithLifecycle()
+    val autoDownloadFavorites by AppSettings.autoDownloadFavorites.collectAsStateWithLifecycle()
     val stopOnTaskRemoved by AppSettings.stopOnTaskRemoved.collectAsStateWithLifecycle()
     val hideVolumeBar by AppSettings.hideVolumeBar.collectAsStateWithLifecycle()
     val hideStatusBarInPlayer by AppSettings.hideStatusBarInPlayer.collectAsStateWithLifecycle()
@@ -710,6 +711,15 @@ fun SettingsScreen(
                     checked = syncDownloadedPlaylists,
                     onCheckedChange = AppSettings::setSyncDownloadedPlaylists,
                     subtitle = stringResource(R.string.sync_downloaded_playlists_subtitle),
+                )
+            }
+            val autoDownloadFavoritesTitle = "よく聴く曲をWi-Fi時に自動ダウンロード"
+            row(autoDownloadFavoritesTitle, "auto download", "favorites", "wifi", "offline", "data saver") {
+                SettingsSubRow(
+                    title = autoDownloadFavoritesTitle,
+                    checked = autoDownloadFavorites,
+                    onCheckedChange = AppSettings::setAutoDownloadFavorites,
+                    subtitle = "お気に入りや再生頻度の高い曲をWi-Fi接続時に自動保存し、どこから再生しても通信量を抑えます",
                 )
             }
         }

@@ -3662,6 +3662,23 @@ class PlaybackService : MediaLibraryService() {
         scheduleForeignCachePurge()
         mediaItem?.mediaId?.let { id ->
             resolveLocalBitrate(id, mediaItem)
+            // If track was enqueued as remote bitchord:// stream but is available locally in Downloads,
+            // seamlessly swap to local playback so it plays locally without network data.
+            val currentUri = mediaItem.localConfiguration?.uri
+            if (currentUri?.scheme == "bitchord") {
+                val savedUri = Downloads.verifiedSavedUri(id)
+                if (savedUri != null) {
+                    val localItem = mediaItem.toSong().copy(localUri = savedUri).toMediaItem()
+                    val index = exoPlayer.currentMediaItemIndex
+                    if (index in 0 until exoPlayer.mediaItemCount && exoPlayer.getMediaItemAt(index).mediaId == id) {
+                        val pos = exoPlayer.currentPosition
+                        val wasPlaying = exoPlayer.isPlaying
+                        exoPlayer.replaceMediaItem(index, localItem)
+                        exoPlayer.seekTo(index, pos)
+                        if (wasPlaying) exoPlayer.play()
+                    }
+                }
+            }
         }
 
         // A crossfade handoff never fires [formatListener] for the entering

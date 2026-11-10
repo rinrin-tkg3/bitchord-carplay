@@ -251,6 +251,10 @@ object AppSettings {
      */
     val syncDownloadedPlaylists = MutableStateFlow(false)
 
+    /** Automatically download frequently played and liked songs when on Wi-Fi. */
+    val autoDownloadFavorites = MutableStateFlow(true)
+    val autoDownloadMaxSongs = MutableStateFlow(30)
+
     /** Whether the active network charges for data. `null` while offline. */
     val meteredConnection = MutableStateFlow<Boolean?>(null)
 
@@ -982,6 +986,8 @@ object AppSettings {
         wifiOnlyDownloads.value = prefs.getBoolean(KEY_WIFI_ONLY_DOWNLOADS, true)
         exportDownloads.value = prefs.getBoolean(KEY_EXPORT_DOWNLOADS, false)
         syncDownloadedPlaylists.value = prefs.getBoolean(KEY_SYNC_DOWNLOADED_PLAYLISTS, false)
+        autoDownloadFavorites.value = prefs.getBoolean(KEY_AUTO_DOWNLOAD_FAVORITES, true)
+        autoDownloadMaxSongs.value = prefs.getInt(KEY_AUTO_DOWNLOAD_MAX_SONGS, 30)
         crossfadeSeconds.value = prefs.getInt(KEY_CROSSFADE, 0)
         smartFadeEnabled.value = prefs.getBoolean(KEY_SMART_FADE, false)
         automixPerformanceMode.value = runCatching {
@@ -1878,6 +1884,17 @@ object AppSettings {
         prefs.edit().putBoolean(KEY_SYNC_DOWNLOADED_PLAYLISTS, value).apply()
     }
 
+    fun setAutoDownloadFavorites(value: Boolean) {
+        autoDownloadFavorites.value = value
+        prefs.edit().putBoolean(KEY_AUTO_DOWNLOAD_FAVORITES, value).apply()
+    }
+
+    fun setAutoDownloadMaxSongs(value: Int) {
+        val v = value.coerceIn(10, 100)
+        autoDownloadMaxSongs.value = v
+        prefs.edit().putInt(KEY_AUTO_DOWNLOAD_MAX_SONGS, v).apply()
+    }
+
     fun setLastfmPrimaryArtistOnly(value: Boolean) {
         lastfmPrimaryArtistOnly.value = value
         prefs.edit().putBoolean(KEY_LASTFM_PRIMARY_ARTIST_ONLY, value).apply()
@@ -2296,6 +2313,8 @@ object AppSettings {
     private const val KEY_WIFI_ONLY_DOWNLOADS = "wifi_only_downloads"
     private const val KEY_EXPORT_DOWNLOADS = "export_downloads"
     private const val KEY_SYNC_DOWNLOADED_PLAYLISTS = "sync_downloaded_playlists"
+    private const val KEY_AUTO_DOWNLOAD_FAVORITES = "auto_download_favorites"
+    private const val KEY_AUTO_DOWNLOAD_MAX_SONGS = "auto_download_max_songs"
     private const val KEY_CROSSFADE = "crossfade_seconds"
     private const val KEY_SMART_FADE = "smart_fade_enabled"
     private const val KEY_AUTOMIX_PERFORMANCE_MODE = "automix_performance_mode"
