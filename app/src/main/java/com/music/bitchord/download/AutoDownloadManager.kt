@@ -287,7 +287,6 @@ object AutoDownloadManager {
         val maxSongs = AppSettings.autoDownloadMaxSongs.value
         val maxStorageMb = AppSettings.autoDownloadMaxStorageMb.value
         val maxStorageBytes = if (maxStorageMb > 0) maxStorageMb.toLong() * 1024L * 1024L else Long.MAX_VALUE
-        var currentBytes = totalAutoDownloadedBytes(context)
 
         val target = AppSettings.autoDownloadTarget.value
         val candidates = LinkedHashMap<String, Song>()
@@ -314,8 +313,8 @@ object AutoDownloadManager {
                 }
             }
 
-            // All-time top played songs if still under maxSongs
-            if (candidates.size < maxSongs) {
+            // All-time top played songs if still under maxSongs (or if unlimited)
+            if (maxSongs <= 0 || candidates.size < maxSongs) {
                 runCatching {
                     ListeningStats.summary(ReplayPeriod.ALL_TIME).songs
                 }.getOrNull()?.forEach { ranked ->
@@ -327,7 +326,44 @@ object AutoDownloadManager {
             }
         }
 
-        val targetList = candidates.values.take(maxSongs)
+        val targetList = if (maxSongs > 0) candidates.values.take(maxSongs) else candidates.values.toList()
+        val targetIdSet = targetList.map { it.videoId }.toSet()
+
+        // --- SMART ROTATION & PRUNING ---
+        // Automatically prune old auto-downloaded songs that are no longer frequently played
+        // (i.e. fell off the active target favorites/top-played ranking).
+        val currentAutoSet = _autoDownloadedIds.value.toSet()
+        val obsoleteIds = currentAutoSet - targetIdSet
+        if (obsoleteIds.isNotEmpty()) {
+            Log.i(TAG, "Pruning ${obsoleteIds.size} obsolete auto-downloads no longer in top listening rotation")
+            for (oldId in obsoleteIds) {
+                runCatching { Downloads.delete(context, oldId) }
+            }
+            val remainingValid = currentAutoSet - obsoleteIds
+            _autoDownloadedIds.value = remainingValid
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putStringSet(KEY_AUTO_DOWNLOADED_IDS, remainingValid)
+                .apply()
+        }
+
+        var currentBytes = totalAutoDownloadedBytes(context)
+
+        // Storage ceiling enforcement: If existing auto-downloads exceed storage limit, prune from least prioritized
+        if (maxStorageMb > 0 && currentBytes > maxStorageBytes) {
+            val reversedTargets = targetList.reversed()
+            for (lowPriSong in reversedTargets) {
+                if (currentBytes <= maxStorageBytes) break
+                val id = lowPriSong.videoId
+                if (_autoDownloadedIds.value.contains(id)) {
+                    val uriStr = Downloads.verifiedSavedUri(id)
+                    val sBytes = if (uriStr != null) uriSizeBytes(context, Uri.parse(uriStr)) else 0L
+                    runCatching { Downloads.delete(context, id) }
+                    currentBytes = (currentBytes - sBytes).coerceAtLeast(0L)
+                }
+            }
+        }
+
         val needed = targetList.filter { song ->
             Downloads.verifiedSavedUri(song.videoId) == null &&
             !Downloads.active.value.containsKey(song.videoId)

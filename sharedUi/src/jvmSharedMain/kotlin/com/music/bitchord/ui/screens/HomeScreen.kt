@@ -584,8 +584,8 @@ private fun QuickAccessTile(
                     .padding(horizontal = 4.dp, vertical = 2.dp),
             ) {
                 Text(
-                    text = "⚡Auto",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    text = "Auto",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 9.sp),
                     color = Color.White,
                 )
             }

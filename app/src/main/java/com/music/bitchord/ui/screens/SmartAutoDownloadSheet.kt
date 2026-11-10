@@ -8,6 +8,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,13 +46,17 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -223,19 +229,84 @@ fun SmartAutoDownloadSheet(
                         }
                     }
 
-                    // Max Songs Limit Card
+                    // Max Songs Limit Card (Enhanced with Slider & Quick Preset Chips)
                     item {
                         SheetSectionHeader(title = "最大曲数制限")
                         SheetCard {
-                            val songOptions = listOf(10, 20, 30, 50, 100)
-                            songOptions.forEachIndexed { index, count ->
-                                if (index > 0) SheetDivider()
-                                OptionRow(
-                                    title = "$count 曲",
-                                    subtitle = if (count == 30) "標準おすすめ (約240MB)" else null,
-                                    selected = maxSongs == count,
-                                    onClick = { AppSettings.setAutoDownloadMaxSongs(count) },
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = if (maxSongs == 0) "無制限" else "$maxSongs 曲",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                    val approxEst = if (maxSongs == 0) "空き容量次第" else if (maxSongs >= 1000) "約${String.format(java.util.Locale.US, "%.1f", maxSongs * 8.0 / 1024)} GB" else "約${(maxSongs * 8.0).toInt()} MB"
+                                    Text(
+                                        text = "目安: $approxEst",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+
+                                Spacer(Modifier.height(12.dp))
+
+                                // Slider: 20 to 2000 songs
+                                var sliderPos by remember(maxSongs) {
+                                    mutableFloatStateOf(if (maxSongs <= 0) 2000f else maxSongs.toFloat().coerceIn(20f, 2000f))
+                                }
+                                Slider(
+                                    value = sliderPos,
+                                    onValueChange = {
+                                        sliderPos = it
+                                        val rounded = ((it / 10f).roundToInt() * 10).coerceIn(20, 2000)
+                                        AppSettings.setAutoDownloadMaxSongs(rounded)
+                                    },
+                                    valueRange = 20f..2000f,
+                                    modifier = Modifier.fillMaxWidth(),
                                 )
+
+                                Spacer(Modifier.height(12.dp))
+
+                                Text(
+                                    text = "クイック選択",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    val presets = listOf(30, 50, 100, 200, 300, 500, 1000, 2000, 0)
+                                    presets.forEach { count ->
+                                        val isSelected = maxSongs == count
+                                        val label = if (count == 0) "無制限" else "$count 曲"
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                                            contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.clickable {
+                                                AppSettings.setAutoDownloadMaxSongs(count)
+                                            }
+                                        ) {
+                                            Text(
+                                                text = label,
+                                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -247,15 +318,18 @@ fun SmartAutoDownloadSheet(
                             val storageOptions = listOf(
                                 500 to "500 MB",
                                 1000 to "1 GB",
-                                2000 to "2 GB (推奨)",
+                                2000 to "2 GB (標準おすすめ)",
                                 5000 to "5 GB",
+                                10000 to "10 GB",
+                                20000 to "20 GB",
+                                50000 to "50 GB",
                                 0 to "無制限",
                             )
                             storageOptions.forEachIndexed { index, (mb, label) ->
                                 if (index > 0) SheetDivider()
                                 OptionRow(
                                     title = label,
-                                    subtitle = if (mb == 0) "端末の空き容量がある限り保存" else "上限に達すると自動ダウンロードを停止",
+                                    subtitle = if (mb == 0) "端末の空き容量がある限り保存" else "上限に達すると最近聴いていない曲を自動整理",
                                     selected = maxStorageMb == mb,
                                     onClick = { AppSettings.setAutoDownloadMaxStorageMb(mb) },
                                 )

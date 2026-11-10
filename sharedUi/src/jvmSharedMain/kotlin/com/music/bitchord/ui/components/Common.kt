@@ -804,12 +804,12 @@ fun DownloadedBadge(videoId: String, tint: Color, modifier: Modifier = Modifier)
             verticalAlignment = Alignment.CenterVertically,
             modifier = modifier
                 .clip(RoundedCornerShape(4.dp))
-                .background(tint.copy(alpha = 0.18f))
+                .background(tint.copy(alpha = 0.16f))
                 .padding(horizontal = 5.dp, vertical = 2.dp),
         ) {
             Text(
-                text = "⚡Auto",
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                text = "Auto",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
                 color = tint,
             )
         }

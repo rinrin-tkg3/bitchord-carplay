@@ -1923,7 +1923,7 @@ object AppSettings {
     }
 
     fun setAutoDownloadMaxSongs(value: Int) {
-        val v = value.coerceIn(10, 100)
+        val v = if (value == 0) 0 else value.coerceIn(10, 5000)
         autoDownloadMaxSongs.value = v
         prefs.edit().putInt(KEY_AUTO_DOWNLOAD_MAX_SONGS, v).apply()
     }

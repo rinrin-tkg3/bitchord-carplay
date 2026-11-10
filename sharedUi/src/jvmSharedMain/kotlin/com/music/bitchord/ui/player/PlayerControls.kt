@@ -360,8 +360,8 @@ internal fun PlaybackQualityLabel(
                     .padding(horizontal = 6.dp, vertical = 2.dp),
             ) {
                 Text(
-                    text = "⚡Auto DL",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                    text = "Auto DL",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
                     color = MaterialTheme.colorScheme.primary,
                 )
             }

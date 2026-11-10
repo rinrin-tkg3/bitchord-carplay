@@ -723,7 +723,8 @@ fun SettingsScreen(
                     icon = Icons.Rounded.AutoAwesome,
                     title = autoDownloadTitle,
                     subtitle = if (autoDownloadFavorites) {
-                        "${autoDownloadTarget.label} · 最大${autoDownloadMaxSongs}曲 · ${autoDownloadQuality.label}"
+                        val maxLabel = if (autoDownloadMaxSongs == 0) "全曲無制限" else "最大${autoDownloadMaxSongs}曲"
+                        "${autoDownloadTarget.label} · $maxLabel · ${autoDownloadQuality.label}"
                     } else {
                         "オフ (無効)"
                     },
