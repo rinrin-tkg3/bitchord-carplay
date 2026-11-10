@@ -3,6 +3,11 @@ package com.music.bitchord.carplay
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.net.Uri
+import com.music.bitchord.BitChordApplication
+import com.music.bitchord.download.Downloads
+import com.music.bitchord.data.settings.AudioQuality
+import java.io.File
 import com.music.bitchord.data.Http
 import com.music.bitchord.data.YtMusicRepository
 import com.music.bitchord.data.innertube.StreamResolver
@@ -247,8 +252,14 @@ object CarPlayWebServer {
             try {
                 // Prefer M4A (audio/mp4, AAC) because iOS 15 Safari on iPhone 7 & CarPlay
                 // natively decode MP4/AAC in hardware and do not support WebM/Opus in <audio>.
+                val effectiveMaxKbps = when (AppSettings.effectiveAudioQuality) {
+                    AudioQuality.LOW -> 64
+                    AudioQuality.MEDIUM -> 160
+                    AudioQuality.HIGH -> 256
+                    AudioQuality.LOSSLESS -> 512
+                }
                 val m4aStream = runCatching {
-                    StreamResolver.resolveForDownload(videoId, maxKbps = 512, requireM4a = true)
+                    StreamResolver.resolveForDownload(videoId, maxKbps = effectiveMaxKbps, requireM4a = true)
                 }.getOrNull()
 
                 val url = m4aStream?.url ?: StreamResolver.resolve(videoId)
@@ -1222,6 +1233,129 @@ object CarPlayWebServer {
         }
     }
 
+    private fun handleLocalAudioStream(
+        method: String,
+        savedUriStr: String,
+        rangeHeader: String?,
+        out: OutputStream,
+    ): Boolean {
+        try {
+            val uri = Uri.parse(savedUriStr)
+            val context = BitChordApplication.instance
+            val afd = runCatching {
+                context.contentResolver.openAssetFileDescriptor(uri, "r")
+            }.getOrNull()
+
+            val file = if (uri.scheme == "file" || afd == null) {
+                val p = uri.path
+                if (!p.isNullOrBlank()) File(p).takeIf { it.exists() && it.isFile } else null
+            } else null
+
+            if (afd == null && file == null) {
+                return false
+            }
+
+            val totalLength = file?.length() ?: (afd?.length ?: -1L)
+            val mimeType = runCatching {
+                context.contentResolver.getType(uri)
+            }.getOrNull() ?: when {
+                savedUriStr.endsWith(".m4a", ignoreCase = true) || savedUriStr.endsWith(".mp4", ignoreCase = true) -> "audio/mp4"
+                savedUriStr.endsWith(".flac", ignoreCase = true) -> "audio/flac"
+                savedUriStr.endsWith(".mp3", ignoreCase = true) -> "audio/mpeg"
+                savedUriStr.endsWith(".ogg", ignoreCase = true) || savedUriStr.endsWith(".opus", ignoreCase = true) -> "audio/ogg"
+                else -> "audio/mp4"
+            }
+
+            var start = 0L
+            var end = if (totalLength > 0L) totalLength - 1L else Long.MAX_VALUE
+            var isRange = false
+
+            if (!rangeHeader.isNullOrBlank() && rangeHeader.startsWith("bytes=")) {
+                val spec = rangeHeader.substringAfter("bytes=").trim()
+                val parts = spec.split("-", limit = 2)
+                val sStr = parts.getOrNull(0)?.trim()
+                val eStr = parts.getOrNull(1)?.trim()
+
+                if (!sStr.isNullOrEmpty()) {
+                    start = sStr.toLongOrNull() ?: 0L
+                    if (!eStr.isNullOrEmpty()) {
+                        val pe = eStr.toLongOrNull()
+                        if (pe != null && pe < end) {
+                            end = pe
+                        }
+                    }
+                    isRange = true
+                } else if (!eStr.isNullOrEmpty()) {
+                    val suffix = eStr.toLongOrNull() ?: 0L
+                    if (totalLength > 0L) {
+                        start = (totalLength - suffix).coerceAtLeast(0L)
+                        end = totalLength - 1L
+                        isRange = true
+                    }
+                }
+            }
+
+            if (totalLength > 0L && start >= totalLength) {
+                val errHeaders = mapOf("Content-Range" to "bytes */$totalLength")
+                writeResponse(out, "416 Range Not Satisfiable", "text/plain", ByteArray(0), errHeaders)
+                afd?.close()
+                return true
+            }
+
+            val contentLength = if (totalLength > 0L) (end - start + 1L) else null
+            val statusText = if (isRange && totalLength > 0L) "206 Partial Content" else "200 OK"
+
+            val sb = StringBuilder()
+            sb.append("HTTP/1.1 ").append(statusText).append("\r\n")
+            sb.append("Content-Type: ").append(mimeType).append("\r\n")
+            sb.append("Accept-Ranges: bytes\r\n")
+            sb.append("Access-Control-Allow-Origin: *\r\n")
+            sb.append("Cache-Control: no-cache\r\n")
+            if (contentLength != null) {
+                sb.append("Content-Length: ").append(contentLength).append("\r\n")
+            }
+            if (isRange && totalLength > 0L) {
+                sb.append("Content-Range: bytes ").append(start).append("-").append(end).append("/").append(totalLength).append("\r\n")
+            }
+            sb.append("Connection: close\r\n\r\n")
+            out.write(sb.toString().toByteArray(Charsets.UTF_8))
+            out.flush()
+
+            if (method != "HEAD") {
+                val inputStream: InputStream = if (file != null) {
+                    java.io.FileInputStream(file)
+                } else {
+                    afd!!.createInputStream()
+                }
+
+                inputStream.use { stream ->
+                    if (start > 0L) {
+                        var toSkip = start
+                        while (toSkip > 0L) {
+                            val skipped = stream.skip(toSkip)
+                            if (skipped <= 0) break
+                            toSkip -= skipped
+                        }
+                    }
+                    val buf = ByteArray(32 * 1024)
+                    var bytesRemaining = if (totalLength > 0L) (end - start + 1L) else Long.MAX_VALUE
+                    while (bytesRemaining > 0L) {
+                        val toRead = min(buf.size.toLong(), bytesRemaining).toInt()
+                        val read = stream.read(buf, 0, toRead)
+                        if (read <= 0) break
+                        out.write(buf, 0, read)
+                        bytesRemaining -= read
+                    }
+                    out.flush()
+                }
+            }
+            afd?.close()
+            return true
+        } catch (_: Exception) {
+            return true
+        }
+    }
+
     private fun handleAudioStream(
         method: String,
         videoId: String,
@@ -1232,6 +1366,15 @@ object CarPlayWebServer {
             writeResponse(out, "400 Bad Request", "text/plain", "Missing videoId".toByteArray())
             return
         }
+
+        // Check if track is downloaded locally: zero cellular data usage!
+        val savedUriStr = Downloads.verifiedSavedUri(videoId)
+        if (!savedUriStr.isNullOrBlank()) {
+            if (handleLocalAudioStream(method, savedUriStr, rangeHeader, out)) {
+                return
+            }
+        }
+
         val resolved = runBlocking(Dispatchers.IO) { resolveIosStream(videoId) }
         if (resolved == null) {
             writeResponse(out, "502 Bad Gateway", "text/plain", "Could not resolve audio stream".toByteArray())

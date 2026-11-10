@@ -58,6 +58,7 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory, Configu
     @kotlin.OptIn(ExperimentalComposeUiApi::class)
     override fun onCreate() {
         super.onCreate()
+        instance = this
         // The player is drawn by the shared UI module; this is what it reads
         // underneath — settings, the Canvas decoder, outputs, the party.
         AndroidStreamHooks.installEarly()
@@ -306,6 +307,8 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory, Configu
     }
 
     companion object {
+        lateinit var instance: BitChordApplication
+            private set
         lateinit var authStore: AuthStore
             private set
 

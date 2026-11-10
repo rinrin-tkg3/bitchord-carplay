@@ -20,6 +20,7 @@ public class PlaybackService: NSObject, ObservableObject {
     @Published public var lastUserActionTime: Date = Date.distantPast
 
     // CarPlay connection state and simulation mode
+    @Published public var isCharging: Bool = false
     @Published public var isCarPlayConnected: Bool = false {
         didSet {
             checkCarPlayPlaybackEnforcement()
@@ -92,6 +93,15 @@ public class PlaybackService: NSObject, ObservableObject {
 
     // MARK: - CarPlay Connection Detection & Observers
     private func setupCarPlayDetection() {
+        // Enable battery monitoring to detect in-car charging state
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSystemStateNotification),
+            name: UIDevice.batteryStateDidChangeNotification,
+            object: nil
+        )
+
         // 1. Audio Route Changes (cable plug/unplug, wireless CarPlay connection)
         NotificationCenter.default.addObserver(
             self,
@@ -163,6 +173,12 @@ public class PlaybackService: NSObject, ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
+            // 0. Check Device Battery State: Charging or Full = connected to in-car power!
+            UIDevice.current.isBatteryMonitoringEnabled = true
+            let bState = UIDevice.current.batteryState
+            let isChargingNow = (bState == .charging || bState == .full)
+            self.isCharging = isChargingNow
+
             // 1. Check UIScreen for connected CarPlay display (Active even before audio plays!)
             let hasCarPlayScreen = UIScreen.screens.contains { screen in
                 screen.traitCollection.userInterfaceIdiom == .carPlay ||
@@ -188,11 +204,11 @@ public class PlaybackService: NSObject, ObservableObject {
                 output.portName.localizedCaseInsensitiveContains("Head Unit")
             }
 
-            // Overall determination: Any of the 4 independent indicators!
-            let isConnected = hasCarPlayScreen || hasCarPlayInterface || hasCarPlayScene || hasCarAudioPort
+            // Overall determination: In-car Charging/Power, or any of the 4 CarPlay indicators!
+            let isConnected = isChargingNow || hasCarPlayScreen || hasCarPlayInterface || hasCarPlayScene || hasCarAudioPort
 
             if self.isCarPlayConnected != isConnected {
-                print("[PlaybackService] CarPlay connection status changed: \(self.isCarPlayConnected) -> \(isConnected) (screen: \(hasCarPlayScreen), interface: \(hasCarPlayInterface), scene: \(hasCarPlayScene), audio: \(hasCarAudioPort))")
+                print("[PlaybackService] CarPlay connection status changed: \(self.isCarPlayConnected) -> \(isConnected) (charging: \(isChargingNow), screen: \(hasCarPlayScreen), interface: \(hasCarPlayInterface), scene: \(hasCarPlayScene), audio: \(hasCarAudioPort))")
                 self.isCarPlayConnected = isConnected
             }
         }

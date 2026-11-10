@@ -168,12 +168,12 @@ public struct NowPlayingView: View {
 
                         // Bottom Row: CarPlay Indicator & Queue Button (Always completely visible!)
                         HStack {
-                            // CarPlay status indicator
+                            // CarPlay status indicator (Charging = In-car connected)
                             HStack(spacing: 5) {
-                                Image(systemName: "car.fill")
+                                Image(systemName: playback.isCharging ? "bolt.fill" : "car.fill")
                                     .font(.system(size: isCompact ? 11 : 13))
                                 if playback.isCarPlayConnected {
-                                    Text("CarPlay接続中")
+                                    Text(playback.isCharging ? "CarPlay (充電中)" : "CarPlay接続中")
                                         .font(.system(size: isCompact ? 11 : 12, weight: .semibold))
                                 } else if playback.simulateCarPlayConnected {
                                     Text("擬似CarPlay")

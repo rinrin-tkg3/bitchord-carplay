@@ -195,7 +195,7 @@ object AppSettings {
      * to assume.
      */
     val audioQualityWifi = MutableStateFlow(AudioQuality.LOSSLESS)
-    val audioQualityCellular = MutableStateFlow(AudioQuality.LOSSLESS)
+    val audioQualityCellular = MutableStateFlow(AudioQuality.MEDIUM)
 
     /** Allowed duration difference when replacing a playing stream with one from a source. */
     val upgradeLengthSlackSeconds = MutableStateFlow(DEFAULT_UPGRADE_LENGTH_SLACK_SECONDS)
@@ -970,6 +970,7 @@ object AppSettings {
 
     private fun readAll() {
         migrateSingleQuality()
+        migrateCellularQuality()
         audioQualityWifi.value = readQuality(KEY_QUALITY_WIFI)
         audioQualityCellular.value = readQuality(KEY_QUALITY_CELLULAR)
         upgradeLengthSlackSeconds.value = prefs.getInt(
@@ -1194,9 +1195,22 @@ object AppSettings {
             .apply()
     }
 
+    private const val KEY_CELLULAR_DEFAULT_MIGRATED = "cellular_quality_default_medium_v1"
+
+    private fun migrateCellularQuality() {
+        if (!prefs.contains(KEY_CELLULAR_DEFAULT_MIGRATED)) {
+            val current = prefs.getString(KEY_QUALITY_CELLULAR, null)
+            if (current == null || current == AudioQuality.LOSSLESS.name) {
+                prefs.edit().putString(KEY_QUALITY_CELLULAR, AudioQuality.MEDIUM.name).apply()
+            }
+            prefs.edit().putBoolean(KEY_CELLULAR_DEFAULT_MIGRATED, true).apply()
+        }
+    }
+
     private fun readQuality(key: String): AudioQuality {
-        val stored = prefs.getString(key, null) ?: return AudioQuality.LOSSLESS
-        return runCatching { AudioQuality.valueOf(stored) }.getOrDefault(AudioQuality.LOSSLESS)
+        val defaultQuality = if (key == KEY_QUALITY_CELLULAR) AudioQuality.MEDIUM else AudioQuality.LOSSLESS
+        val stored = prefs.getString(key, null) ?: return defaultQuality
+        return runCatching { AudioQuality.valueOf(stored) }.getOrDefault(defaultQuality)
     }
 
     /**

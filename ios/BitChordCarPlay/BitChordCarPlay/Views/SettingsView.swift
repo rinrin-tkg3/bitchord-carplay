@@ -25,7 +25,7 @@ public struct SettingsView: View {
                         if playback.isCarPlayConnected {
                             HStack(spacing: 4) {
                                 Circle().fill(Color.green).frame(width: 8, height: 8)
-                                Text("CarPlay 接続中").foregroundColor(.green).font(.subheadline)
+                                Text(playback.isCharging ? "接続中 (給電/充電中)" : "CarPlay 接続中").foregroundColor(.green).font(.subheadline)
                             }
                         } else if playback.simulateCarPlayConnected {
                             HStack(spacing: 4) {
@@ -35,7 +35,7 @@ public struct SettingsView: View {
                         } else {
                             HStack(spacing: 4) {
                                 Circle().fill(Color.red).frame(width: 8, height: 8)
-                                Text("未接続 (再生停止)").foregroundColor(.red).font(.subheadline)
+                                Text("未接続 (バッテリー駆動)").foregroundColor(.red).font(.subheadline)
                             }
                         }
                     }
