@@ -20,11 +20,13 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.music.bitchord.data.DebugLog as Log
 import com.music.bitchord.data.OfflinePlaylists
+import com.music.bitchord.data.YtMusicRepository
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.settings.AutoDownloadQuality
 import com.music.bitchord.data.settings.AutoDownloadTarget
 import com.music.bitchord.data.settings.DownloadQuality
+import com.music.bitchord.data.spotify.LocalPlaylistStore
 import com.music.bitchord.data.stats.ListeningStats
 import com.music.bitchord.data.stats.ReplayPeriod
 import kotlinx.coroutines.CoroutineScope
@@ -39,6 +41,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -227,7 +230,7 @@ object AutoDownloadManager {
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             ONE_OFF_WORK,
-            ExistingWorkPolicy.KEEP,
+            ExistingWorkPolicy.REPLACE,
             request,
         )
     }
@@ -291,37 +294,116 @@ object AutoDownloadManager {
         val target = AppSettings.autoDownloadTarget.value
         val candidates = LinkedHashMap<String, Song>()
 
-        // 1. Liked songs from OfflinePlaylists (if target includes liked)
+        fun addCandidate(song: Song) {
+            val id = song.videoId.trim()
+            if (id.isNotBlank() && !isLocalUriOnly(id) && !candidates.containsKey(id)) {
+                candidates[id] = song
+            }
+        }
+
+        fun hasReachedCapacity(): Boolean = maxSongs > 0 && candidates.size >= maxSongs
+
+        // 1. Liked songs (if target includes liked: BOTH or LIKED_ONLY)
         if (target == AutoDownloadTarget.BOTH || target == AutoDownloadTarget.LIKED_ONLY) {
+            // A. Online Liked Songs from YouTube Music (VLLM / LM) with pagination
+            runCatching {
+                withTimeoutOrNull(25_000L) {
+                    var page = YtMusicRepository.browseSongs(YtMusicRepository.LIKED_MUSIC).getOrNull()
+                        ?: YtMusicRepository.browseSongs("LM").getOrNull()
+                    var pagesRead = 0
+                    while (page != null && pagesRead < 50) { // Up to ~5000 songs
+                        page.songs.forEach { addCandidate(it) }
+                        if (hasReachedCapacity()) break
+                        val token = page.continuation ?: break
+                        pagesRead++
+                        page = YtMusicRepository.moreSongs(token).getOrNull()
+                    }
+                }
+            }
+
+            // B. Offline Liked Songs from OfflinePlaylists
             runCatching {
                 OfflinePlaylists.playlists.value.firstOrNull { it.isLiked }?.songs.orEmpty()
-            }.getOrNull()?.forEach { song ->
-                if (song.videoId.isNotBlank() && !isLocalUriOnly(song.videoId)) {
-                    candidates[song.videoId] = song
+            }.getOrNull()?.forEach { addCandidate(it) }
+        }
+
+        // 2. Frequently listened songs (if target includes top played: BOTH or TOP_PLAYED_ONLY)
+        if (!hasReachedCapacity() && (target == AutoDownloadTarget.BOTH || target == AutoDownloadTarget.TOP_PLAYED_ONLY)) {
+            // This month's top played songs
+            runCatching {
+                ListeningStats.summary(ReplayPeriod.THIS_MONTH).songs
+            }.getOrNull()?.forEach { ranked ->
+                addCandidate(ranked.song)
+            }
+
+            // All-time top played songs
+            if (!hasReachedCapacity()) {
+                runCatching {
+                    ListeningStats.summary(ReplayPeriod.ALL_TIME).songs
+                }.getOrNull()?.forEach { ranked ->
+                    addCandidate(ranked.song)
                 }
             }
         }
 
-        // 2. Frequently listened songs (if target includes top played)
-        if (target == AutoDownloadTarget.BOTH || target == AutoDownloadTarget.TOP_PLAYED_ONLY) {
+        // 3. User Playlists & History (if still under capacity)
+        if (!hasReachedCapacity()) {
+            // YouTube Music account listening history
             runCatching {
-                ListeningStats.summary(ReplayPeriod.THIS_MONTH).songs
-            }.getOrNull()?.forEach { ranked ->
-                val song = ranked.song
-                if (song.videoId.isNotBlank() && !candidates.containsKey(song.videoId) && !isLocalUriOnly(song.videoId)) {
-                    candidates[song.videoId] = song
+                withTimeoutOrNull(10_000L) {
+                    YtMusicRepository.history().getOrNull().orEmpty()
+                }
+            }.getOrNull()?.forEach { addCandidate(it) }
+        }
+
+        if (!hasReachedCapacity()) {
+            // BitChord Local Playlists (imported/created)
+            runCatching {
+                LocalPlaylistStore.playlists.value.flatMap { it.songs }
+            }.getOrNull()?.forEach { addCandidate(it) }
+
+            // All other Offline Playlists
+            runCatching {
+                OfflinePlaylists.playlists.value.filterNot { it.isLiked }.flatMap { it.songs }
+            }.getOrNull()?.forEach { addCandidate(it) }
+        }
+
+        if (!hasReachedCapacity()) {
+            // YouTube Music Library Playlists
+            runCatching {
+                withTimeoutOrNull(20_000L) {
+                    val libShelves = YtMusicRepository.libraryPlaylists().getOrNull().orEmpty()
+                    for (shelf in libShelves) {
+                        if (hasReachedCapacity()) break
+                        val bId = shelf.browseId ?: continue
+                        val pSongs = YtMusicRepository.browseSongs(bId).getOrNull()?.songs.orEmpty()
+                        pSongs.forEach { addCandidate(it) }
+                    }
                 }
             }
+        }
 
-            // All-time top played songs if still under maxSongs (or if unlimited)
-            if (maxSongs <= 0 || candidates.size < maxSongs) {
-                runCatching {
-                    ListeningStats.summary(ReplayPeriod.ALL_TIME).songs
-                }.getOrNull()?.forEach { ranked ->
-                    val song = ranked.song
-                    if (song.videoId.isNotBlank() && !candidates.containsKey(song.videoId) && !isLocalUriOnly(song.videoId)) {
-                        candidates[song.videoId] = song
-                    }
+        // 4. Smart Taste Expansion (if still under capacity):
+        // When the user's liked and played library has fewer tracks than maxSongs,
+        // intelligently pull recommended tracks based on user taste so the download quota is fulfilled!
+        if (!hasReachedCapacity() && target != AutoDownloadTarget.LIKED_ONLY) {
+            // A. Quick Picks / Recommended from Home
+            runCatching {
+                withTimeoutOrNull(10_000L) {
+                    YtMusicRepository.quickPicks(excludeSongIds = candidates.keys).getOrNull().orEmpty()
+                }
+            }.getOrNull()?.forEach { addCandidate(it) }
+
+            // B. Radio stations seeded by the user's top played songs
+            if (!hasReachedCapacity()) {
+                val seedTracks = candidates.values.take(20) // Up to 20 top songs as seeds
+                for (seed in seedTracks) {
+                    if (hasReachedCapacity()) break
+                    runCatching {
+                        withTimeoutOrNull(10_000L) {
+                            YtMusicRepository.radio(seed.videoId).getOrNull().orEmpty()
+                        }
+                    }.getOrNull()?.forEach { addCandidate(it) }
                 }
             }
         }
@@ -330,12 +412,12 @@ object AutoDownloadManager {
         val targetIdSet = targetList.map { it.videoId }.toSet()
 
         // --- SMART ROTATION & PRUNING ---
-        // Automatically prune old auto-downloaded songs that are no longer frequently played
-        // (i.e. fell off the active target favorites/top-played ranking).
+        // Automatically prune old auto-downloaded songs that are no longer in active target rotation.
+        // Safety guard: only prune if targetList is non-empty to avoid wiping out offline files on transient error.
         val currentAutoSet = _autoDownloadedIds.value.toSet()
         val obsoleteIds = currentAutoSet - targetIdSet
-        if (obsoleteIds.isNotEmpty()) {
-            Log.i(TAG, "Pruning ${obsoleteIds.size} obsolete auto-downloads no longer in top listening rotation")
+        if (targetList.isNotEmpty() && obsoleteIds.isNotEmpty()) {
+            Log.i(TAG, "Pruning ${obsoleteIds.size} obsolete auto-downloads no longer in target rotation")
             for (oldId in obsoleteIds) {
                 runCatching { Downloads.delete(context, oldId) }
             }
@@ -366,7 +448,7 @@ object AutoDownloadManager {
 
         val needed = targetList.filter { song ->
             Downloads.verifiedSavedUri(song.videoId) == null &&
-            !Downloads.active.value.containsKey(song.videoId)
+            Downloads.active.value[song.videoId].let { it !is DownloadState.Queued && it !is DownloadState.Running }
         }
 
         if (needed.isEmpty()) {
@@ -374,7 +456,7 @@ object AutoDownloadManager {
             return@withLock true
         }
 
-        Log.i(TAG, "Starting auto-download for ${needed.size} songs on Wi-Fi (target: ${target.name})")
+        Log.i(TAG, "Starting auto-download for ${needed.size} songs on Wi-Fi (target: ${target.name}, total candidates: ${candidates.size})")
         val approxSongBytes = 8L * 1024 * 1024 // ~8 MB estimate
         for (song in needed) {
             if (AppSettings.autoDownloadWifiOnly.value && AppSettings.meteredConnection.value != false) {
@@ -395,7 +477,7 @@ object AutoDownloadManager {
             queuedAutoDownloadIds.add(song.videoId)
             Downloads.enqueue(context, song, from = "AutoDownload")
             currentBytes += approxSongBytes
-            delay(400L)
+            delay(30L)
         }
 
         recordSyncSuccess(context)
@@ -403,7 +485,7 @@ object AutoDownloadManager {
     }
 
     private fun isLocalUriOnly(videoId: String): Boolean {
-        return videoId.startsWith("content://") || videoId.startsWith("file://") || videoId.startsWith("/")
+        return videoId.isBlank() || videoId.startsWith("content://") || videoId.startsWith("file://") || videoId.startsWith("/")
     }
 }
 
