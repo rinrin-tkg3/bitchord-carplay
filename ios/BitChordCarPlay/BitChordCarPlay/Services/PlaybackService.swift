@@ -455,6 +455,9 @@ public class PlaybackService: NSObject, ObservableObject {
                 }
             }
         }
+
+        // Immediate playback report after track setup to unlock Android loading spinner
+        reportPlaybackToHost()
     }
 
     @objc private func playerItemDidReachEnd() {

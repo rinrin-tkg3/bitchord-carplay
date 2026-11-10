@@ -1015,6 +1015,7 @@ internal class CarPlayWebSpeaker(
 ) : RemoteSpeaker {
 
     override var sink: CastSink? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override var active: Boolean = false
         private set
@@ -1053,6 +1054,14 @@ internal class CarPlayWebSpeaker(
     private var autoEndedForMediaId: String? = null
     private var lastSinkNotifyAt: Long = 0L
 
+    private val loadingTimeoutRunnable = Runnable {
+        if (loading) {
+            loading = false
+            sink?.onRemotePlaybackChanged()
+            onChanged()
+            CarPlayWebBridge.updatePlaybackSnapshot()
+        }
+    }
     // Guard against loading getting permanently stuck if client report drops or delays
     private val isLoadingEffective: Boolean
         get() = loading && (SystemClock.elapsedRealtime() - requestedAt < 2500L)
@@ -1074,11 +1083,15 @@ internal class CarPlayWebSpeaker(
         }
 
     override val playbackState: Int
-        get() = when {
-            isLoadingEffective -> Player.STATE_BUFFERING
-            finished -> Player.STATE_ENDED
-            status?.buffering == true -> Player.STATE_BUFFERING
-            else -> Player.STATE_READY
+        get() {
+            val now = SystemClock.elapsedRealtime()
+            val isBufferingRecent = status?.buffering == true && (now - (status?.at ?: 0L) < 3000L)
+            return when {
+                isLoadingEffective -> Player.STATE_BUFFERING
+                finished -> Player.STATE_ENDED
+                isBufferingRecent -> Player.STATE_BUFFERING
+                else -> Player.STATE_READY
+            }
         }
 
     override val positionMs: Long
@@ -1166,6 +1179,7 @@ internal class CarPlayWebSpeaker(
     }
 
     fun stop(resumeHere: Boolean) {
+        mainHandler.removeCallbacks(loadingTimeoutRunnable)
         wantsAutoActivate = false
         CarPlayWebBridge.setCarPlaySession(false)
         if (!active) return
@@ -1279,6 +1293,8 @@ internal class CarPlayWebSpeaker(
         autoEndedForMediaId = null
         wantsPlay = true
         loading = true
+        mainHandler.removeCallbacks(loadingTimeoutRunnable)
+        mainHandler.postDelayed(loadingTimeoutRunnable, 2500L)
         finished = false
         requestedPositionMs = 0L
         wantedSeekMs = 0L
@@ -1330,9 +1346,16 @@ internal class CarPlayWebSpeaker(
         val now = SystemClock.elapsedRealtime()
         val cleanMediaId = mediaId.substringBefore("?").trim()
         val targetId = wantedMediaId?.substringBefore("?")?.trim()
-        val isTargetMatch = cleanMediaId.isNotBlank() && (targetId == null || cleanMediaId == targetId || cleanMediaId.contains(targetId) || targetId.contains(cleanMediaId))
+        val isTargetMatch = cleanMediaId.isNotBlank() && (
+            targetId == null ||
+            cleanMediaId == targetId ||
+            cleanMediaId.contains(targetId) ||
+            targetId.contains(cleanMediaId) ||
+            (now - requestedAt > 1800L && playing)
+        )
 
         if (isTargetMatch) {
+            mainHandler.removeCallbacks(loadingTimeoutRunnable)
             val prev = status
             val wasLoading = loading
             loading = false
@@ -1433,6 +1456,12 @@ internal class CarPlayWebSpeaker(
                 onChanged()
                 CarPlayWebBridge.updatePlaybackSnapshot()
             }
+        } else if (cleanMediaId.isNotBlank() && playing && loading) {
+            mainHandler.removeCallbacks(loadingTimeoutRunnable)
+            loading = false
+            sink?.onRemotePlaybackChanged()
+            onChanged()
+            CarPlayWebBridge.updatePlaybackSnapshot()
         }
     }
 
