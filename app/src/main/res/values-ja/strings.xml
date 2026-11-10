@@ -155,6 +155,7 @@
     <string name="top_albums">よく聴いたアルバム</string>
     <string name="top_genres">よく聴いたジャンル</string>
     <string name="cancel_all">すべてキャンセル</string>
+    <string name="retry_failed">失敗を再試行</string>
     <string name="language">言語</string>
     <string name="app_language">アプリの言語</string>
     <string name="app_language_description">BitChordで使用する言語を選択してください。</string>

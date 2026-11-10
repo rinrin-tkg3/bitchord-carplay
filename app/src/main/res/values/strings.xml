@@ -222,6 +222,7 @@
     <string name="top_albums">Top albums</string>
     <string name="top_genres">Top genres</string>
     <string name="cancel_all">Cancel all</string>
+    <string name="retry_failed">Retry failed</string>
     <string name="language">Language</string>
     <string name="app_language">App language</string>
     <string name="app_language_description">Choose the language used by BitChord.</string>

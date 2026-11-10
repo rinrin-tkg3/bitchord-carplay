@@ -680,61 +680,87 @@ object StreamResolver {
         videoId: String,
         maxKbps: Int,
         requireM4a: Boolean = false,
+        strictM4a: Boolean = false,
     ): Stream {
-        val stream = downloadStream(videoId, maxKbps, requireM4a)
-        val allowed = if (requireM4a) setOf("m4a") else setOf("m4a", "webm")
+        val stream = downloadStream(videoId, maxKbps, requireM4a, strictM4a)
+        val allowed = if (strictM4a) setOf("m4a") else setOf("m4a", "webm")
         check(stream.downloadExtension in allowed) {
             "Can't save ${stream.mimeType} — try again"
         }
         return stream
     }
 
-    private suspend fun downloadStream(videoId: String, maxKbps: Int, requireM4a: Boolean): Stream =
-        withContext(TrackLog.about(videoId)) {
-            init
+    private suspend fun downloadStream(
+        videoId: String,
+        maxKbps: Int,
+        requireM4a: Boolean,
+        strictM4a: Boolean = false,
+    ): Stream = withContext(TrackLog.about(videoId)) {
+        init
 
-            // Whether any client offered AAC at all, as distinct from whether one
-            // could be turned into a working URL. Those are different failures and
-            // only one of them is worth telling someone to try again about: a track
-            // no client has an MP4 for will not have one in five minutes either,
-            // while an MP4 that won't probe is a bad afternoon on Google's side.
-            var offered = false
+        // Attempt 1: Try with primary requested format (M4A or WebM)
+        val (firstTry, offeredFirst) = tryDownloadFormat(videoId, maxKbps, requireM4a)
+        if (firstTry != null) return@withContext firstTry
 
-            // InnerTubeX hands back its best rung of the container asked for, and
-            // has no ceiling of its own. Within the setting's ceiling it is the
-            // answer; above it (best Opus over Standard's 128kbps) extraction
-            // below can pick the lower rung, and this is kept as the fallback.
-            val found = innerTubeXStreamAllowingUploads(videoId, maxKbps, requireM4a)
-                ?.takeIf { if (requireM4a) it.downloadExtension == "m4a" else it.downloadExtension == "webm" }
-            if (found != null) {
-                offered = true
-                if (found.kbps <= maxKbps) return@withContext found
-                TrackLog.d(TAG, "InnerTubeX's ${found.kbps}kbps is over the ${maxKbps}kbps download ceiling for $videoId")
-            }
+        var offered = offeredFirst
 
-            // The failsafe changes how the URL is found, not which container the
-            // destination can accept.
-            val format = if (requireM4a) "MP4" else "Opus"
-            if (found == null) TrackLog.w(TAG, "InnerTubeX found no usable $format for $videoId; extracting")
+        // Attempt 2: If strictM4a is false, fall back to alternate container format (WebM or M4A)
+        if (!strictM4a) {
+            TrackLog.w(
+                TAG,
+                "Download format ${if (requireM4a) "M4A" else "WebM"} unavailable for $videoId; " +
+                    "falling back to alternate container ${if (requireM4a) "WebM" else "M4A"}",
+            )
+            val (altTry, offeredAlt) = tryDownloadFormat(videoId, maxKbps, !requireM4a)
+            if (altTry != null) return@withContext altTry
+            if (offeredAlt) offered = true
+
+            // Attempt 3: Fall back to core playback resolver as safety net
             runCatching {
-                newPipeStream(videoId) { candidates ->
-                    // Capped the same way as the player-response selection, off
-                    // the same setting, or the failsafe would quietly hand back
-                    // a rendition the user said they didn't want to keep.
-                    val matching = candidates.filter {
-                        if (requireM4a) it.second.isM4a else it.second.isWebmOpus
-                    }
-                    underCeiling(matching, maxKbps)
-                        ?.also { offered = true }
+                val playbackUrl = resolve(videoId)
+                val mime = when {
+                    playbackUrl.contains("mime=audio%2Fmp4") || playbackUrl.contains("mime=audio/mp4") -> "audio/mp4"
+                    playbackUrl.contains("mime=audio%2Fwebm") || playbackUrl.contains("mime=audio/webm") -> "audio/webm"
+                    playbackUrl.contains("mime=audio%2Fmpeg") || playbackUrl.contains(".mp3") -> "audio/mpeg"
+                    else -> "audio/mp4"
                 }
-            }.onSuccess { return@withContext it }
-                .onFailure { TrackLog.w(TAG, "extraction found no $format for $videoId: ${it.message}") }
-
-            // A rung above the ceiling beats no download at all; extraction does the same.
-            found?.let { return@withContext it }
-            if (offered) error("Couldn't reach a downloadable copy just now — try again")
-            error("No downloadable audio for this track")
+                Stream(url = playbackUrl, kbps = 128, mimeType = mime)
+            }.getOrNull()?.let { return@withContext it }
         }
+
+        if (offered) error("Couldn't reach a downloadable copy just now — try again")
+        error("No downloadable audio for this track")
+    }
+
+    private suspend fun tryDownloadFormat(
+        videoId: String,
+        maxKbps: Int,
+        requireM4a: Boolean,
+    ): Pair<Stream?, Boolean> {
+        var offered = false
+        val found = innerTubeXStreamAllowingUploads(videoId, maxKbps, requireM4a)
+            ?.takeIf { if (requireM4a) it.downloadExtension == "m4a" else it.downloadExtension == "webm" }
+        if (found != null) {
+            offered = true
+            if (found.kbps <= maxKbps) return found to true
+            TrackLog.d(TAG, "InnerTubeX's ${found.kbps}kbps is over the ${maxKbps}kbps download ceiling for $videoId")
+        }
+
+        val format = if (requireM4a) "MP4" else "Opus"
+        val extracted = runCatching {
+            newPipeStream(videoId) { candidates ->
+                val matching = candidates.filter {
+                    if (requireM4a) it.second.isM4a else it.second.isWebmOpus
+                }
+                underCeiling(matching, maxKbps)
+                    ?.also { offered = true }
+            }
+        }.getOrNull()
+
+        if (extracted != null) return extracted to true
+        if (found != null) return found to true
+        return null to offered
+    }
 
     // ---- Format selection ---------------------------------------------------
 

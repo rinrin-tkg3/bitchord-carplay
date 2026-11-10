@@ -235,6 +235,22 @@ fun DownloadManagerPage(
                         },
                         modifier = Modifier.weight(1f),
                     )
+                    val failedItems = remember(items) { items.filter { it.progress is DownloadProgress.Failed } }
+                    if (failedItems.isNotEmpty()) {
+                        TextButton(
+                            onClick = {
+                                failedItems.forEach { Downloads.enqueue(context, it.song, it.from) }
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(stringResource(R.string.retry_failed))
+                        }
+                    }
                     if (session.busy) {
                         TextButton(
                             onClick = {

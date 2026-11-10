@@ -1260,18 +1260,23 @@ object Downloads {
             error("Couldn't download this song from $name — check that it's still connected")
         }
         // MediaStore.Audio refuses audio/webm on affected Android versions.
-        // Keep Opus for app-private downloads, but pin exported downloads and
-        // auto-downloaded songs (for iPhone/CarPlay zero-data local playback) to
-        // AAC-in-MP4 for both the initial resolve and any mid-transfer retry.
-        val requireM4a = AppSettings.exportDownloads.value || AutoDownloadManager.isQueuedForAutoDownload(track.videoId)
-        val stream = StreamResolver.resolveForDownload(track.videoId, quality.maxKbps, requireM4a)
+        // Keep Opus for app-private downloads, but prefer AAC-in-MP4 for exported downloads
+        // and auto-downloaded songs (for iPhone/CarPlay zero-data local playback).
+        // Only export strictly enforces M4A; auto-downloads will gracefully fall back to WebM
+        // so songs never fail to download.
+        val isExport = AppSettings.exportDownloads.value
+        val isAutoDownload = AutoDownloadManager.isQueuedForAutoDownload(track.videoId)
+        val requireM4a = isExport || isAutoDownload
+        val strictM4a = isExport
+        val stream = StreamResolver.resolveForDownload(track.videoId, quality.maxKbps, requireM4a = requireM4a, strictM4a = strictM4a)
+        val isM4a = stream.downloadExtension == "m4a"
         return Route(
             extension = stream.downloadExtension,
             mimeType = stream.downloadMimeType,
             describe = "${stream.kbps}kbps ${stream.mimeType}",
             downloadFormat = youtubeDownloadBadge(stream.downloadExtension, stream.kbps),
             write = { sink, onProgress ->
-                Downloader.fetch(track.videoId, stream, quality.maxKbps, requireM4a, sink, onProgress)
+                Downloader.fetch(track.videoId, stream, quality.maxKbps, requireM4a = isM4a, sink, onProgress)
             },
         )
     }
