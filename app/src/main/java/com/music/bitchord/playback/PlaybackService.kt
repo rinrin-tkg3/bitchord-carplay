@@ -8098,6 +8098,9 @@ class PlaybackService : MediaLibraryService() {
         private var reportedPlayWhenReady = false
         private var reportedPlaybackState = Player.STATE_IDLE
         private var reportedIsPlaying = false
+        private var reportedRemotePositionMs = C.TIME_UNSET
+        private var reportedRemotePositionTimeMs = 0L
+        private var remoteSeekPending = false
 
         init {
             cast.sink = this
@@ -8331,29 +8334,65 @@ class PlaybackService : MediaLibraryService() {
                 flags.add(Player.EVENT_IS_PLAYING_CHANGED)
                 listeners.forEach { it.onIsPlayingChanged(playing) }
             }
-            // Always: a controller extrapolates the position from the last one
-            // it was given, and has to be re-anchored whenever the receiver
-            // has been seeked, stalled or resumed.
-            flags.add(Player.EVENT_POSITION_DISCONTINUITY)
-            val position = Player.PositionInfo(
-                null,
-                currentMediaItemIndex,
-                currentMediaItem,
-                null,
-                currentPeriodIndex,
-                currentPosition,
-                contentPosition,
-                C.INDEX_UNSET,
-                C.INDEX_UNSET,
-            )
-            listeners.forEach {
-                it.onPositionDiscontinuity(position, position, Player.DISCONTINUITY_REASON_SEEK)
+            val now = SystemClock.elapsedRealtime()
+            val currentPos = currentPosition
+            val isExplicitSeek = remoteSeekPending
+            remoteSeekPending = false
+
+            // Extrapolate expected position based on time elapsed since last reported position
+            val expectedPos = if (reportedRemotePositionMs != C.TIME_UNSET && reportedRemotePositionTimeMs > 0L && reportedIsPlaying) {
+                reportedRemotePositionMs + (now - reportedRemotePositionTimeMs)
+            } else {
+                reportedRemotePositionMs
             }
-            val events = Player.Events(flags.build())
-            listeners.forEach { it.onEvents(this, events) }
+
+            // Only fire position discontinuity on explicit seek or substantial unexpected jump/rewind (> 1800ms)
+            val isDiscontinuity = isExplicitSeek ||
+                (reportedRemotePositionMs != C.TIME_UNSET && (currentPos < reportedRemotePositionMs - 800L || abs(currentPos - expectedPos) > 1800L))
+
+            if (isDiscontinuity) {
+                flags.add(Player.EVENT_POSITION_DISCONTINUITY)
+                val oldPos = if (reportedRemotePositionMs != C.TIME_UNSET) reportedRemotePositionMs else currentPos
+                val oldPosition = Player.PositionInfo(
+                    null,
+                    currentMediaItemIndex,
+                    currentMediaItem,
+                    null,
+                    currentPeriodIndex,
+                    oldPos,
+                    oldPos,
+                    C.INDEX_UNSET,
+                    C.INDEX_UNSET,
+                )
+                val newPosition = Player.PositionInfo(
+                    null,
+                    currentMediaItemIndex,
+                    currentMediaItem,
+                    null,
+                    currentPeriodIndex,
+                    currentPos,
+                    currentPos,
+                    C.INDEX_UNSET,
+                    C.INDEX_UNSET,
+                )
+                listeners.forEach {
+                    it.onPositionDiscontinuity(oldPosition, newPosition, Player.DISCONTINUITY_REASON_SEEK)
+                }
+            }
+            reportedRemotePositionMs = currentPos
+            reportedRemotePositionTimeMs = now
+
+            val builtFlags = flags.build()
+            if (builtFlags.size() > 0) {
+                val events = Player.Events(builtFlags)
+                listeners.forEach { it.onEvents(this, events) }
+            }
         }
 
         override fun onRemoteRouteChanged() {
+            reportedRemotePositionMs = C.TIME_UNSET
+            reportedRemotePositionTimeMs = 0L
+            remoteSeekPending = false
             val info = getDeviceInfo()
             listeners.forEach { it.onDeviceInfoChanged(info) }
             val events = Player.Events(FlagSet.Builder().add(Player.EVENT_DEVICE_INFO_CHANGED).build())
@@ -8448,6 +8487,7 @@ class PlaybackService : MediaLibraryService() {
             if (locked()) return
             onUserIntent()
             if (cast.active) {
+                remoteSeekPending = true
                 cast.seekTo(positionMs)
                 return
             }
@@ -8458,6 +8498,7 @@ class PlaybackService : MediaLibraryService() {
             if (locked()) return
             onUserIntent()
             if (cast.active) {
+                remoteSeekPending = true
                 cast.seekTo(cast.positionMs - seekBackIncrement)
                 return
             }
@@ -8468,6 +8509,7 @@ class PlaybackService : MediaLibraryService() {
             if (locked()) return
             onUserIntent()
             if (cast.active) {
+                remoteSeekPending = true
                 cast.seekTo(cast.positionMs + seekForwardIncrement)
                 return
             }
@@ -8488,6 +8530,7 @@ class PlaybackService : MediaLibraryService() {
             if (locked()) return
             onUserIntent()
             if (cast.active) {
+                remoteSeekPending = true
                 cast.seekTo(0L)
                 return
             }
@@ -8593,6 +8636,7 @@ class PlaybackService : MediaLibraryService() {
             // The track already on the receiver: a position in it is the
             // receiver's to seek, not the paused phone's.
             if (cast.active && mediaItemIndex == wrappedPlayer.currentMediaItemIndex) {
+                remoteSeekPending = true
                 cast.seekTo(positionMs)
                 return
             }

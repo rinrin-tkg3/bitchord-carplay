@@ -1463,8 +1463,7 @@ internal class CarPlayWebSpeaker(
                 }
             }
 
-            val periodicSyncNeeded = now - lastSinkNotifyAt > 450L
-            val stateChanged = prev == null ||
+            val playStateChanged = prev == null ||
                 wasLoading ||
                 prev.mediaId != cleanMediaId ||
                 prev.isPlaying != effectivePlaying ||
@@ -1472,12 +1471,16 @@ internal class CarPlayWebSpeaker(
                 prev.durationMs != authDurMs ||
                 ended ||
                 reachedAuthoritativeEnd ||
-                abs(drift) > 650L ||
-                periodicSyncNeeded
+                isPendingSeek ||
+                abs(drift) > 1500L
 
-            if (stateChanged) {
-                lastSinkNotifyAt = now
+            if (playStateChanged) {
                 sink?.onRemotePlaybackChanged()
+            }
+
+            val periodicSyncNeeded = now - lastSinkNotifyAt > 450L
+            if (playStateChanged || periodicSyncNeeded) {
+                lastSinkNotifyAt = now
                 onChanged()
                 CarPlayWebBridge.updatePlaybackSnapshot()
             }
