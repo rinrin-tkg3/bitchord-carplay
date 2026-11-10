@@ -1119,7 +1119,7 @@ internal class CarPlayWebSpeaker(
             }
             if (!wantsPlay) return s.positionMs.coerceAtLeast(0L)
             // Extrapolate smoothly if client is playing or if client report is temporarily stalled
-            val isMoving = s.isPlaying || (now - s.at > 1200L && wantsPlay && !finished)
+            val isMoving = (s.isPlaying || (wantsPlay && !finished)) && (now - s.at < 4000L)
             if (!isMoving) return s.positionMs.coerceAtLeast(0L)
             val elapsed = (now - s.at).coerceAtLeast(0L)
             val extrapolated = s.positionMs + elapsed
@@ -1408,9 +1408,9 @@ internal class CarPlayWebSpeaker(
                 playing &&
                 !buffering &&
                 !isPendingSeek &&
-                abs(drift) <= 450L
+                abs(drift) <= 600L
             ) {
-                (currentExtrap + (drift * 0.22).toLong()).coerceAtLeast(0L)
+                (currentExtrap + (drift * 0.25).toLong()).coerceAtLeast(0L)
             } else {
                 effectivePos
             }

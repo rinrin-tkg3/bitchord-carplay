@@ -1347,7 +1347,7 @@ fun NowPlayingScreen(
     val collapsePastSettling by remember { derivedStateOf { p() >= 0.01f } }
     val collapsePastHalf by remember { derivedStateOf { p() >= 0.5f } }
     val collapseAlmostDone by remember { derivedStateOf { p() >= 0.999f } }
-    val collapseDone by remember { derivedStateOf { p() >= 1f } }
+    val collapseDone by remember { derivedStateOf { p() >= 0.99f } }
     val queueShowing by remember { derivedStateOf { queueSlide.floatValue > 0.01f } }
 
     // Whether the sleeve has finished getting out of the way, and how far the
@@ -3854,7 +3854,7 @@ fun NowPlayingScreen(
                         // [lyricsOpen] asked first: a close has already hidden the
                         // panel, and doesn't then listen for the sleeve leaving the
                         // header — which is its first frame of moving.
-                        val lyricsPanelVisible = lyricsOpen && collapseDone
+                        val lyricsPanelVisible = lyricsOpen && (collapseDone || collapseAlmostDone || p() >= 0.99f)
                         if (lyricsPanelVisible || playerPrewarmStage >= 2) {
                                 LyricsTranslationMotion(
                                     trigger = lyricsTranslation.transition,
@@ -3882,7 +3882,7 @@ fun NowPlayingScreen(
                                         playhead = lyricsPlayhead,
                                         looking = !lyricsUnavailable,
                                         isPlaying = isPlaying && position.advancing,
-                                        active = lyricsPanelVisible,
+                                        active = lyricsOpen,
                                         onSeekToLine = seekToLyric,
                                         controlsOpen = lyricsControlsOpen || keepLyricsControlsVisible,
                                         onRevealControls = { lyricsControlsOpen = true },
