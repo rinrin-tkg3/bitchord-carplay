@@ -84,9 +84,88 @@ public class PlaybackService: NSObject, ObservableObject {
 
         setupAudioSession()
         setupRemoteCommands()
+        setupCarPlayDetection()
         startPolling()
         // Auto discover on app launch if not connected
         triggerAutoDiscovery()
+    }
+
+    // MARK: - CarPlay Connection Detection & Observers
+    private func setupCarPlayDetection() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAudioRouteChange(_:)),
+            name: AVAudioSession.routeChangeNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSystemStateNotification),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSystemStateNotification),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSystemStateNotification),
+            name: UIScene.didActivateNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSystemStateNotification),
+            name: UIScene.didDisconnectNotification,
+            object: nil
+        )
+
+        updateCarPlayConnectionStatus()
+    }
+
+    @objc private func handleAudioRouteChange(_ notification: Notification) {
+        updateCarPlayConnectionStatus()
+    }
+
+    @objc private func handleSystemStateNotification() {
+        updateCarPlayConnectionStatus()
+    }
+
+    public func updateCarPlayConnectionStatus() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            // 1. Check CarPlaySceneDelegate interfaceController presence
+            let hasCarPlayInterface = CarPlaySceneDelegate.hasConnectedInterface
+
+            // 2. Check UIApplication connectedScenes for carTemplateApplication role
+            let scenes = UIApplication.shared.connectedScenes
+            let hasCarPlayScene = scenes.contains { scene in
+                if scene.session.role == .carTemplateApplication {
+                    return scene.activationState == .foregroundActive ||
+                           scene.activationState == .foregroundInactive ||
+                           scene.activationState == .background
+                }
+                return false
+            }
+
+            // 3. Check AVAudioSession output route for carAudio
+            let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+            let hasCarAudioPort = outputs.contains { output in
+                output.portType == .carAudio
+            }
+
+            // Overall determination: active interface, car scene, or car audio output
+            let isConnected = hasCarPlayInterface || hasCarPlayScene || hasCarAudioPort
+
+            if self.isCarPlayConnected != isConnected {
+                print("[PlaybackService] CarPlay connection status changed: \(self.isCarPlayConnected) -> \(isConnected) (interface: \(hasCarPlayInterface), scene: \(hasCarPlayScene), audio: \(hasCarAudioPort))")
+                self.isCarPlayConnected = isConnected
+            }
+        }
     }
 
     // MARK: - CarPlay Playback Enforcement
@@ -114,6 +193,7 @@ public class PlaybackService: NSObject, ObservableObject {
     public func startPolling() {
         pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.updateCarPlayConnectionStatus()
             self?.fetchState()
         }
         reportTimer?.invalidate()

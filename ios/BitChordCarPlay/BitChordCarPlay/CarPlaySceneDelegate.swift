@@ -2,11 +2,23 @@ import Foundation
 import CarPlay
 
 public class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
+    public static private(set) var shared: CarPlaySceneDelegate?
+    public static var hasConnectedInterface: Bool {
+        return shared?.interfaceController != nil
+    }
+
     public var interfaceController: CPInterfaceController?
+
+    public override init() {
+        super.init()
+        CarPlaySceneDelegate.shared = self
+    }
 
     public func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene, didConnect interfaceController: CPInterfaceController) {
         self.interfaceController = interfaceController
-        PlaybackService.shared.isCarPlayConnected = true
+        CarPlaySceneDelegate.shared = self
+        print("[CarPlaySceneDelegate] didConnect interfaceController")
+        PlaybackService.shared.updateCarPlayConnectionStatus()
         WiFiReconnectService.shared.triggerReconnect()
         PlaybackService.shared.triggerAutoDiscovery()
 
@@ -16,7 +28,30 @@ public class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelega
     }
 
     public func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene, didDisconnectInterfaceController interfaceController: CPInterfaceController) {
+        print("[CarPlaySceneDelegate] didDisconnectInterfaceController")
         self.interfaceController = nil
-        PlaybackService.shared.isCarPlayConnected = false
+        PlaybackService.shared.updateCarPlayConnectionStatus()
+    }
+
+    public func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene, didDisconnect interfaceController: CPInterfaceController, from window: CPWindow) {
+        print("[CarPlaySceneDelegate] didDisconnect from window")
+        self.interfaceController = nil
+        PlaybackService.shared.updateCarPlayConnectionStatus()
+    }
+
+    public func sceneDidDisconnect(_ scene: UIScene) {
+        print("[CarPlaySceneDelegate] sceneDidDisconnect")
+        self.interfaceController = nil
+        PlaybackService.shared.updateCarPlayConnectionStatus()
+    }
+
+    public func sceneDidEnterBackground(_ scene: UIScene) {
+        print("[CarPlaySceneDelegate] sceneDidEnterBackground")
+        PlaybackService.shared.updateCarPlayConnectionStatus()
+    }
+
+    public func sceneWillEnterForeground(_ scene: UIScene) {
+        print("[CarPlaySceneDelegate] sceneWillEnterForeground")
+        PlaybackService.shared.updateCarPlayConnectionStatus()
     }
 }
