@@ -2,6 +2,7 @@ package com.music.bitchord.carplay
 
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.net.Uri
 import com.music.bitchord.BitChordApplication
@@ -1244,41 +1245,141 @@ object CarPlayWebServer {
         }
     }
 
+    private fun isIosPlayable(headerBytes: ByteArray, uriStr: String): Pair<Boolean, String> {
+        // Exclude unsupported package playlists (Offline DASH/HLS)
+        if (uriStr.endsWith(".m3u8", ignoreCase = true) || uriStr.endsWith(".mpd", ignoreCase = true)) {
+            return Pair(false, "application/octet-stream")
+        }
+
+        // WebM / MKV container magic: 1A 45 DF A3 (Cannot be decoded by iOS 15 / iPhone 7)
+        if (headerBytes.size >= 4 &&
+            headerBytes[0] == 0x1A.toByte() &&
+            headerBytes[1] == 0x45.toByte() &&
+            headerBytes[2] == 0xDF.toByte() &&
+            headerBytes[3] == 0xA3.toByte()
+        ) {
+            return Pair(false, "audio/webm")
+        }
+
+        // Ogg container (Opus / Vorbis) magic: OggS (Cannot be decoded natively by iOS Safari/AVPlayer)
+        if (headerBytes.size >= 4 &&
+            headerBytes[0] == 'O'.code.toByte() &&
+            headerBytes[1] == 'g'.code.toByte() &&
+            headerBytes[2] == 'g'.code.toByte() &&
+            headerBytes[3] == 'S'.code.toByte()
+        ) {
+            return Pair(false, "audio/ogg")
+        }
+
+        // MP4 / M4A (AAC / ALAC): "ftyp" box at offset 4
+        if (headerBytes.size >= 8 &&
+            headerBytes[4] == 'f'.code.toByte() &&
+            headerBytes[5] == 't'.code.toByte() &&
+            headerBytes[6] == 'y'.code.toByte() &&
+            headerBytes[7] == 'p'.code.toByte()
+        ) {
+            return Pair(true, "audio/mp4")
+        }
+
+        // FLAC: fLaC
+        if (headerBytes.size >= 4 &&
+            headerBytes[0] == 'f'.code.toByte() &&
+            headerBytes[1] == 'L'.code.toByte() &&
+            headerBytes[2] == 'a'.code.toByte() &&
+            headerBytes[3] == 'C'.code.toByte()
+        ) {
+            return Pair(true, "audio/flac")
+        }
+
+        // MP3: ID3 or sync frame 0xFF 0xFB/F3/F2
+        if (headerBytes.size >= 3 &&
+            headerBytes[0] == 'I'.code.toByte() &&
+            headerBytes[1] == 'D'.code.toByte() &&
+            headerBytes[2] == '3'.code.toByte()
+        ) {
+            return Pair(true, "audio/mpeg")
+        }
+        if (headerBytes.size >= 2 &&
+            headerBytes[0] == 0xFF.toByte() &&
+            (headerBytes[1].toInt() and 0xE0) == 0xE0
+        ) {
+            return Pair(true, "audio/mpeg")
+        }
+
+        // WAV: RIFF ... WAVE
+        if (headerBytes.size >= 12 &&
+            headerBytes[0] == 'R'.code.toByte() &&
+            headerBytes[1] == 'I'.code.toByte() &&
+            headerBytes[2] == 'F'.code.toByte() &&
+            headerBytes[3] == 'F'.code.toByte() &&
+            headerBytes[8] == 'W'.code.toByte() &&
+            headerBytes[9] == 'A'.code.toByte() &&
+            headerBytes[10] == 'V'.code.toByte() &&
+            headerBytes[11] == 'E'.code.toByte()
+        ) {
+            return Pair(true, "audio/wav")
+        }
+
+        // Suffix-based fallback if magic bytes indeterminate
+        return when {
+            uriStr.endsWith(".m4a", ignoreCase = true) || uriStr.endsWith(".mp4", ignoreCase = true) -> Pair(true, "audio/mp4")
+            uriStr.endsWith(".mp3", ignoreCase = true) -> Pair(true, "audio/mpeg")
+            uriStr.endsWith(".flac", ignoreCase = true) -> Pair(true, "audio/flac")
+            uriStr.endsWith(".wav", ignoreCase = true) -> Pair(true, "audio/wav")
+            uriStr.endsWith(".opus", ignoreCase = true) || uriStr.endsWith(".ogg", ignoreCase = true) || uriStr.endsWith(".webm", ignoreCase = true) -> Pair(false, "audio/ogg")
+            else -> Pair(false, "application/octet-stream")
+        }
+    }
+
     private fun handleLocalAudioStream(
         method: String,
         savedUriStr: String,
         rangeHeader: String?,
         out: OutputStream,
     ): Boolean {
+        var pfd: ParcelFileDescriptor? = null
         try {
             val uri = Uri.parse(savedUriStr)
             val context = BitChordApplication.instance
-            val afd = runCatching {
-                context.contentResolver.openAssetFileDescriptor(uri, "r")
-            }.getOrNull()
 
-            val file = if (uri.scheme == "file" || afd == null) {
+            val file = if (uri.scheme == "file") {
                 val p = uri.path
                 if (!p.isNullOrBlank()) File(p).takeIf { it.exists() && it.isFile } else null
             } else null
 
-            if (afd == null && file == null) {
+            var totalLength = file?.length() ?: -1L
+            if (file == null && uri.scheme == "content") {
+                pfd = runCatching { context.contentResolver.openFileDescriptor(uri, "r") }.getOrNull()
+                if (pfd != null) {
+                    val statSize = pfd.statSize
+                    if (statSize > 0L) totalLength = statSize
+                }
+            }
+
+            if (totalLength <= 0L) {
+                pfd?.close()
                 return false
             }
 
-            val totalLength = file?.length() ?: (afd?.length ?: -1L)
-            val mimeType = runCatching {
-                context.contentResolver.getType(uri)
-            }.getOrNull() ?: when {
-                savedUriStr.endsWith(".m4a", ignoreCase = true) || savedUriStr.endsWith(".mp4", ignoreCase = true) -> "audio/mp4"
-                savedUriStr.endsWith(".flac", ignoreCase = true) -> "audio/flac"
-                savedUriStr.endsWith(".mp3", ignoreCase = true) -> "audio/mpeg"
-                savedUriStr.endsWith(".ogg", ignoreCase = true) || savedUriStr.endsWith(".opus", ignoreCase = true) -> "audio/ogg"
-                else -> "audio/mp4"
+            // Probe container format from file header (first 16 bytes)
+            val headerBytes = ByteArray(16)
+            val bytesRead = if (file != null) {
+                java.io.FileInputStream(file).use { it.read(headerBytes) }
+            } else if (pfd != null) {
+                java.io.FileInputStream(pfd.fileDescriptor).use { it.read(headerBytes) }
+            } else {
+                -1
+            }
+
+            val (playableOnIos, mimeType) = isIosPlayable(headerBytes.copyOf(maxOf(0, bytesRead)), savedUriStr)
+            if (!playableOnIos) {
+                // If local track is Opus/WebM or unsupported, gracefully fall back to iOS AAC remote stream!
+                pfd?.close()
+                return false
             }
 
             var start = 0L
-            var end = if (totalLength > 0L) totalLength - 1L else Long.MAX_VALUE
+            var end = totalLength - 1L
             var isRange = false
 
             if (!rangeHeader.isNullOrBlank() && rangeHeader.startsWith("bytes=")) {
@@ -1298,7 +1399,7 @@ object CarPlayWebServer {
                     isRange = true
                 } else if (!eStr.isNullOrEmpty()) {
                     val suffix = eStr.toLongOrNull() ?: 0L
-                    if (totalLength > 0L) {
+                    if (suffix > 0L) {
                         start = (totalLength - suffix).coerceAtLeast(0L)
                         end = totalLength - 1L
                         isRange = true
@@ -1306,15 +1407,15 @@ object CarPlayWebServer {
                 }
             }
 
-            if (totalLength > 0L && start >= totalLength) {
+            if (start >= totalLength) {
                 val errHeaders = mapOf("Content-Range" to "bytes */$totalLength")
                 writeResponse(out, "416 Range Not Satisfiable", "text/plain", ByteArray(0), errHeaders)
-                afd?.close()
+                pfd?.close()
                 return true
             }
 
-            val contentLength = if (totalLength > 0L) (end - start + 1L) else null
-            val statusText = if (isRange && totalLength > 0L) "206 Partial Content" else "200 OK"
+            val contentLength = end - start + 1L
+            val statusText = if (isRange) "206 Partial Content" else "200 OK"
 
             val sb = StringBuilder()
             sb.append("HTTP/1.1 ").append(statusText).append("\r\n")
@@ -1322,10 +1423,8 @@ object CarPlayWebServer {
             sb.append("Accept-Ranges: bytes\r\n")
             sb.append("Access-Control-Allow-Origin: *\r\n")
             sb.append("Cache-Control: no-cache\r\n")
-            if (contentLength != null) {
-                sb.append("Content-Length: ").append(contentLength).append("\r\n")
-            }
-            if (isRange && totalLength > 0L) {
+            sb.append("Content-Length: ").append(contentLength).append("\r\n")
+            if (isRange) {
                 sb.append("Content-Range: bytes ").append(start).append("-").append(end).append("/").append(totalLength).append("\r\n")
             }
             sb.append("Connection: close\r\n\r\n")
@@ -1333,26 +1432,32 @@ object CarPlayWebServer {
             out.flush()
 
             if (method != "HEAD") {
-                val inputStream: InputStream = if (file != null) {
+                val stream: InputStream = if (file != null) {
                     java.io.FileInputStream(file)
                 } else {
-                    afd!!.createInputStream()
+                    java.io.FileInputStream(pfd!!.fileDescriptor)
                 }
 
-                inputStream.use { stream ->
+                stream.use { s ->
                     if (start > 0L) {
                         var toSkip = start
                         while (toSkip > 0L) {
-                            val skipped = stream.skip(toSkip)
-                            if (skipped <= 0) break
-                            toSkip -= skipped
+                            val skipped = s.skip(toSkip)
+                            if (skipped <= 0L) {
+                                val discard = ByteArray(minOf(4096L, toSkip).toInt())
+                                val r = s.read(discard)
+                                if (r <= 0) break
+                                toSkip -= r
+                            } else {
+                                toSkip -= skipped
+                            }
                         }
                     }
                     val buf = ByteArray(32 * 1024)
-                    var bytesRemaining = if (totalLength > 0L) (end - start + 1L) else Long.MAX_VALUE
+                    var bytesRemaining = contentLength
                     while (bytesRemaining > 0L) {
-                        val toRead = min(buf.size.toLong(), bytesRemaining).toInt()
-                        val read = stream.read(buf, 0, toRead)
+                        val toRead = minOf(buf.size.toLong(), bytesRemaining).toInt()
+                        val read = s.read(buf, 0, toRead)
                         if (read <= 0) break
                         out.write(buf, 0, read)
                         bytesRemaining -= read
@@ -1360,10 +1465,11 @@ object CarPlayWebServer {
                     out.flush()
                 }
             }
-            afd?.close()
+            pfd?.close()
             return true
         } catch (_: Exception) {
-            return true
+            pfd?.close()
+            return false
         }
     }
 

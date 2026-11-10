@@ -69,6 +69,10 @@ public class PlaybackService: NSObject, ObservableObject {
     private var cachedArtwork: MPMediaItemArtwork? = nil
     private var isDownloadingArtwork: Bool = false
 
+    // Seamless / Gapless next track preloading
+    private var preloadedVideoId: String? = nil
+    private var preloadedPlayerItem: AVPlayerItem? = nil
+
     public var baseUrl: String {
         let host = serverHost.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanHost = host.isEmpty ? "10.207.211.165" : host
@@ -367,10 +371,50 @@ public class PlaybackService: NSObject, ObservableObject {
         updateNowPlayingInfo()
     }
 
+    private func getNextTrackVideoId() -> String? {
+        guard let q = queue, !q.isEmpty else { return nil }
+        let currentIdx = state?.currentIndex ?? 0
+        if let next = q.first(where: { $0.index == currentIdx + 1 }) {
+            return next.videoId
+        }
+        if let currentLoaded = currentLoadedMediaId,
+           let pos = q.firstIndex(where: { $0.videoId == currentLoaded }),
+           pos + 1 < q.count {
+            return q[pos + 1].videoId
+        }
+        return nil
+    }
+
+    private func preloadNextTrack(videoId: String) {
+        guard preloadedVideoId != videoId else { return }
+        preloadedVideoId = videoId
+        let streamUrlStr = "\(baseUrl)/api/audio/\(videoId)?cid=ios_carplay"
+        guard let url = URL(string: streamUrlStr) else { return }
+        let asset = AVURLAsset(url: url)
+        let item = AVPlayerItem(asset: asset)
+        asset.loadValuesAsynchronously(forKeys: ["playable", "duration"]) { [weak self] in
+            DispatchQueue.main.async {
+                if self?.preloadedVideoId == videoId {
+                    self?.preloadedPlayerItem = item
+                }
+            }
+        }
+    }
+
     // MARK: - Track Loading (Mode 1: Stream from Android vs Mode 2: Direct from iPhone)
     private func loadAndPlayTrack(videoId: String, startPositionMs: Int64) {
         self.currentLoadedMediaId = videoId
         let seekSec = Double(max(0, startPositionMs)) / 1000.0
+
+        if startPositionMs <= 0, preloadedVideoId == videoId, let item = preloadedPlayerItem {
+            preloadedVideoId = nil
+            preloadedPlayerItem = nil
+            setupPlayerWithItem(item, startPositionSec: 0)
+            if let nextId = getNextTrackVideoId() {
+                preloadNextTrack(videoId: nextId)
+            }
+            return
+        }
 
         switch playbackMode {
         case .streamFromAndroid:
@@ -380,6 +424,10 @@ public class PlaybackService: NSObject, ObservableObject {
 
         case .directFromPhone:
             resolveAndPlayDirectStream(videoId: videoId, startPositionSec: seekSec)
+        }
+
+        if let nextId = getNextTrackVideoId() {
+            preloadNextTrack(videoId: nextId)
         }
     }
 
@@ -420,14 +468,11 @@ public class PlaybackService: NSObject, ObservableObject {
         }.resume()
     }
 
-    private func setupPlayerWithUrl(_ url: URL, startPositionSec: Double) {
+    private func setupPlayerWithItem(_ playerItem: AVPlayerItem, startPositionSec: Double) {
         if let token = timeObserverToken {
             player?.removeTimeObserver(token)
             timeObserverToken = nil
         }
-
-        let asset = AVURLAsset(url: url)
-        let playerItem = AVPlayerItem(asset: asset)
 
         NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(playerItemDidReachEnd), name: .AVPlayerItemDidPlayToEndTime, object: playerItem)
@@ -470,11 +515,23 @@ public class PlaybackService: NSObject, ObservableObject {
                         self.durationSec = dSec
                     }
                 }
+                // Preload next track when within 25 seconds of song end
+                if self.preloadedPlayerItem == nil, self.durationSec > 30, self.currentPositionSec >= self.durationSec - 25 {
+                    if let nextId = self.getNextTrackVideoId() {
+                        self.preloadNextTrack(videoId: nextId)
+                    }
+                }
             }
         }
 
         // Immediate playback report after track setup to unlock Android loading spinner
         reportPlaybackToHost()
+    }
+
+    private func setupPlayerWithUrl(_ url: URL, startPositionSec: Double) {
+        let asset = AVURLAsset(url: url)
+        let playerItem = AVPlayerItem(asset: asset)
+        setupPlayerWithItem(playerItem, startPositionSec: startPositionSec)
     }
 
     @objc private func playerItemDidReachEnd() {

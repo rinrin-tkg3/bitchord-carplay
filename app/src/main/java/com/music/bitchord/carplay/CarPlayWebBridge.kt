@@ -1054,6 +1054,11 @@ internal class CarPlayWebSpeaker(
     private var autoEndedForMediaId: String? = null
     private var lastSinkNotifyAt: Long = 0L
 
+    // Monotonic smooth playback clock state (guarantees jitter-free, monotonic 1.0x progress for LyricClock)
+    private var basePositionMs: Long = 0L
+    private var baseElapsedRealtime: Long = 0L
+    private var lastEmittedPositionMs: Long = 0L
+
     private val loadingTimeoutRunnable = Runnable {
         if (loading) {
             loading = false
@@ -1096,35 +1101,33 @@ internal class CarPlayWebSpeaker(
 
     override val positionMs: Long
         get() {
-            val s = status
-            val now = SystemClock.elapsedRealtime()
             if (!active) return requestedPositionMs.coerceAtLeast(0L)
-            if (isLoadingEffective || (now - requestedAt < SEEK_GRACE_MS && requestedPositionMs >= 0L)) {
-                if (wantsPlay && !finished && requestedAt > 0L) {
-                    val elapsed = (now - requestedAt).coerceAtLeast(0L)
-                    val extrapolated = requestedPositionMs + elapsed
-                    val dur = durationMs
-                    return if (dur != C.TIME_UNSET && dur > 0L) extrapolated.coerceAtMost(dur) else extrapolated
-                }
-                return requestedPositionMs.coerceAtLeast(0L)
-            }
-            if (s == null) {
-                if (wantsPlay && !finished) {
-                    val elapsed = (now - requestedAt).coerceAtLeast(0L)
-                    val extrapolated = requestedPositionMs + elapsed
-                    val dur = durationMs
-                    return if (dur != C.TIME_UNSET && dur > 0L) extrapolated.coerceAtMost(dur) else extrapolated
-                }
-                return requestedPositionMs.coerceAtLeast(0L)
-            }
-            if (!wantsPlay) return s.positionMs.coerceAtLeast(0L)
-            // Extrapolate smoothly if client is playing or if client report is temporarily stalled
-            val isMoving = (s.isPlaying || (wantsPlay && !finished)) && (now - s.at < 4000L)
-            if (!isMoving) return s.positionMs.coerceAtLeast(0L)
-            val elapsed = (now - s.at).coerceAtLeast(0L)
-            val extrapolated = s.positionMs + elapsed
+            val now = SystemClock.elapsedRealtime()
             val dur = durationMs
-            return if (dur != C.TIME_UNSET && dur > 0L) extrapolated.coerceAtMost(dur) else extrapolated
+
+            if (isLoadingEffective) {
+                return requestedPositionMs.coerceAtLeast(0L)
+            }
+
+            if (!wantsPlay || finished) {
+                return basePositionMs.coerceAtLeast(0L)
+            }
+
+            // During active playback, output a perfectly monotonic, continuous 1.0x clock
+            // that is in lockstep with SystemClock.elapsedRealtime().
+            val elapsed = if (baseElapsedRealtime > 0L) (now - baseElapsedRealtime).coerceAtLeast(0L) else 0L
+            val computed = basePositionMs + elapsed
+            val clamped = if (dur != C.TIME_UNSET && dur > 0L) computed.coerceAtMost(dur) else computed
+
+            // Absolute monotonic guarantee: position must never rewind unless a seek is underway
+            val isRecentSeek = now - requestedAt < SEEK_GRACE_MS
+            val monotonic = if (isRecentSeek || clamped >= lastEmittedPositionMs) {
+                clamped
+            } else {
+                lastEmittedPositionMs
+            }
+            lastEmittedPositionMs = monotonic
+            return monotonic
         }
 
     override val durationMs: Long
@@ -1165,6 +1168,9 @@ internal class CarPlayWebSpeaker(
         requestedPositionMs = pos
         wantedSeekMs = pos
         requestedAt = SystemClock.elapsedRealtime()
+        basePositionMs = pos
+        baseElapsedRealtime = SystemClock.elapsedRealtime()
+        lastEmittedPositionMs = pos
         commandSeq++
         seekSeq++
 
@@ -1191,6 +1197,9 @@ internal class CarPlayWebSpeaker(
         loading = false
         finished = false
         autoEndedForMediaId = null
+        basePositionMs = pos
+        baseElapsedRealtime = 0L
+        lastEmittedPositionMs = pos
         commandSeq++
 
         localPlayer()?.let { player ->
@@ -1221,6 +1230,8 @@ internal class CarPlayWebSpeaker(
         wantsPlay = true
         finished = false
         requestedAt = SystemClock.elapsedRealtime()
+        baseElapsedRealtime = SystemClock.elapsedRealtime()
+        lastEmittedPositionMs = basePositionMs
         commandSeq++
         sink?.onRemotePlaybackChanged()
         onChanged()
@@ -1230,11 +1241,15 @@ internal class CarPlayWebSpeaker(
     override fun pause() {
         if (!active) return
         wantsPlay = false
+        val pos = positionMs
+        basePositionMs = pos
+        baseElapsedRealtime = 0L
+        lastEmittedPositionMs = pos
         status = status?.let {
             ClientStatus(it.mediaId, false, false, it.positionMs, it.durationMs, it.volume, SystemClock.elapsedRealtime())
         }
         if (status != null) {
-            requestedPositionMs = positionMs
+            requestedPositionMs = pos
             requestedAt = 0L
         }
         commandSeq++
@@ -1256,6 +1271,9 @@ internal class CarPlayWebSpeaker(
         requestedPositionMs = target
         wantedSeekMs = target
         requestedAt = SystemClock.elapsedRealtime()
+        basePositionMs = target
+        baseElapsedRealtime = SystemClock.elapsedRealtime()
+        lastEmittedPositionMs = target
         seekSeq++
         commandSeq++
         status = status?.let {
@@ -1299,6 +1317,9 @@ internal class CarPlayWebSpeaker(
         requestedPositionMs = 0L
         wantedSeekMs = 0L
         requestedAt = SystemClock.elapsedRealtime()
+        basePositionMs = 0L
+        baseElapsedRealtime = SystemClock.elapsedRealtime()
+        lastEmittedPositionMs = 0L
         commandSeq++
         seekSeq++
 
@@ -1392,28 +1413,32 @@ internal class CarPlayWebSpeaker(
                 autoEndedForMediaId = null
             }
 
-            // Smooth out Wi-Fi HTTP report jitter during steady playback so Android's LyricClock
-            // receives a monotonic 1.0x playhead without 400ms network-jitter jumps.
-            val currentExtrap = if (prev != null && prev.mediaId == cleanMediaId && prev.isPlaying) {
-                val elapsed = (now - prev.at).coerceAtLeast(0L)
-                prev.positionMs + elapsed
+            // Monotonic Phase-Locked Extrapolation:
+            // Maintain continuous 1.0x forward playback without jumping or rewinding on Wi-Fi report jitter.
+            val currentMonotonic = if (baseElapsedRealtime > 0L && wantsPlay) {
+                basePositionMs + (now - baseElapsedRealtime).coerceAtLeast(0L)
             } else {
-                effectivePos
+                basePositionMs
             }
-            val drift = effectivePos - currentExtrap
-            val anchoredPos = if (
-                prev != null &&
-                prev.mediaId == cleanMediaId &&
-                prev.isPlaying &&
-                playing &&
-                !buffering &&
-                !isPendingSeek &&
-                abs(drift) <= 600L
-            ) {
-                (currentExtrap + (drift * 0.25).toLong()).coerceAtLeast(0L)
-            } else {
-                effectivePos
+            val drift = effectivePos - currentMonotonic
+
+            if (isPendingSeek || abs(drift) > 1200L) {
+                // Legitimate discontinuity: hard sync base clock to client report
+                basePositionMs = effectivePos
+                baseElapsedRealtime = now
+                lastEmittedPositionMs = effectivePos
+            } else if (playing && !buffering && wantsPlay) {
+                // Normal steady playback: gently adjust base clock (LPF) to stay in sync
+                // without ever reversing or stuttering the monotonic output.
+                if (drift != 0L) {
+                    val slew = (drift * 0.15).toLong()
+                    val adjusted = currentMonotonic + slew
+                    basePositionMs = maxOf(lastEmittedPositionMs, adjusted)
+                    baseElapsedRealtime = now
+                }
             }
+
+            val anchoredPos = if (authDurMs > 0L) currentMonotonic.coerceAtMost(authDurMs) else currentMonotonic
 
             // If host has explicitly paused, reject late/stale playing=true reports from client
             val effectivePlaying = if (!wantsPlay) false else playing
@@ -1422,7 +1447,7 @@ internal class CarPlayWebSpeaker(
                 mediaId = cleanMediaId,
                 isPlaying = effectivePlaying,
                 buffering = buffering,
-                positionMs = if (authDurMs > 0L) anchoredPos.coerceAtMost(authDurMs) else anchoredPos,
+                positionMs = anchoredPos,
                 durationMs = authDurMs,
                 volume = 100,
                 at = now,
@@ -1471,12 +1496,21 @@ internal class CarPlayWebSpeaker(
         }
         wantsPlay = play
         if (!play) {
+            val pos = currentPositionMs ?: positionMs
+            basePositionMs = pos
+            baseElapsedRealtime = 0L
+            lastEmittedPositionMs = pos
             status = status?.let {
-                ClientStatus(it.mediaId, false, false, currentPositionMs ?: it.positionMs, it.durationMs, it.volume, SystemClock.elapsedRealtime())
+                ClientStatus(it.mediaId, false, false, pos, it.durationMs, it.volume, SystemClock.elapsedRealtime())
             }
             requestedAt = 0L
         } else {
             requestedAt = SystemClock.elapsedRealtime()
+            baseElapsedRealtime = SystemClock.elapsedRealtime()
+            if (currentPositionMs != null && currentPositionMs >= 0L) {
+                basePositionMs = currentPositionMs
+                lastEmittedPositionMs = currentPositionMs
+            }
         }
         if (currentPositionMs != null && currentPositionMs >= 0L) {
             requestedPositionMs = currentPositionMs
@@ -1519,11 +1553,13 @@ internal class CarPlayWebSpeaker(
 
     private fun warmUpNextTrack(player: Player) {
         val cur = player.currentMediaItemIndex
-        if (cur in 0 until player.mediaItemCount - 1) {
-            val nextId = player.getMediaItemAt(cur + 1).mediaId
-            if (nextId.isNotBlank()) {
-                CarPlayWebServer.warmUpTrack(nextId)
-            }
+        val nextId = when {
+            cur in 0 until player.mediaItemCount - 1 -> player.getMediaItemAt(cur + 1).mediaId
+            player.repeatMode == Player.REPEAT_MODE_ALL && player.mediaItemCount > 0 -> player.getMediaItemAt(0).mediaId
+            else -> null
+        }
+        if (!nextId.isNullOrBlank()) {
+            CarPlayWebServer.warmUpTrack(nextId)
         }
     }
 

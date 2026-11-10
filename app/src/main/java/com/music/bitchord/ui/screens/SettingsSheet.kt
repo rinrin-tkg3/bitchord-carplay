@@ -2120,6 +2120,12 @@ fun SettingsScreen(
         )
     }
 
+    if (showSmartAutoDownloadSheet) {
+        SmartAutoDownloadSheet(
+            onDismiss = { showSmartAutoDownloadSheet = false }
+        )
+    }
+
     if (showLastfmLoginDialog) {
         var usernameInput by remember { mutableStateOf("") }
         var passwordInput by remember { mutableStateOf("") }

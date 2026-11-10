@@ -1260,9 +1260,10 @@ object Downloads {
             error("Couldn't download this song from $name — check that it's still connected")
         }
         // MediaStore.Audio refuses audio/webm on affected Android versions.
-        // Keep Opus for app-private downloads, but pin exported downloads to
+        // Keep Opus for app-private downloads, but pin exported downloads and
+        // auto-downloaded songs (for iPhone/CarPlay zero-data local playback) to
         // AAC-in-MP4 for both the initial resolve and any mid-transfer retry.
-        val requireM4a = AppSettings.exportDownloads.value
+        val requireM4a = AppSettings.exportDownloads.value || AutoDownloadManager.isQueuedForAutoDownload(track.videoId)
         val stream = StreamResolver.resolveForDownload(track.videoId, quality.maxKbps, requireM4a)
         return Route(
             extension = stream.downloadExtension,
