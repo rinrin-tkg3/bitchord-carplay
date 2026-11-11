@@ -1440,7 +1440,21 @@ internal class CarPlayWebSpeaker(
 
             val anchoredPos = if (authDurMs > 0L) currentMonotonic.coerceAtMost(authDurMs) else currentMonotonic
 
-            // If host has explicitly paused, reject late/stale playing=true reports from client
+            // Bidirectional play state synchronization:
+            // When client (iPhone) reports a settled play state change (not buffering and not right after host requested action)
+            if (!buffering && !wasLoading && (now - requestedAt >= 1500L)) {
+                if (playing != wantsPlay) {
+                    wantsPlay = playing
+                    if (!playing) {
+                        baseElapsedRealtime = 0L
+                        basePositionMs = effectivePos
+                    } else {
+                        baseElapsedRealtime = now
+                        basePositionMs = effectivePos
+                    }
+                }
+            }
+
             val effectivePlaying = if (!wantsPlay) false else playing
 
             status = ClientStatus(

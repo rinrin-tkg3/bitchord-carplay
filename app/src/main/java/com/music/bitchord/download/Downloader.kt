@@ -6,6 +6,7 @@ import com.music.bitchord.data.innertube.PlayerClient
 import com.music.bitchord.data.innertube.StreamResolver
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -84,56 +85,73 @@ object Downloader {
 
         while (position < total) {
             coroutineContext.ensureActive()
-            val length = minOf(CHUNK_BYTES, PlayerClient.rangeBytesFor(url), total - position)
+            var chunkAttempts = 0
+            val maxChunkAttempts = 3
+            var chunkDone = false
 
-            val response = try {
-                open(url, position, length)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "range at $position failed for $videoId: ${e.message}")
-                throw e
-            }
+            while (!chunkDone && chunkAttempts < maxChunkAttempts) {
+                chunkAttempts++
+                coroutineContext.ensureActive()
+                val length = minOf(CHUNK_BYTES, PlayerClient.rangeBytesFor(url), total - position)
 
-            // A URL that served its opening and then refuses is the one failure
-            // worth a second attempt: it means the identity behind it has been
-            // stood down mid-download, not that the track is gone. Telling the
-            // resolver is what stops the next track failing the same way.
-            if (response.code in REFUSAL_CODES) {
-                response.close()
-                StreamResolver.onPlaybackRefused(url, response.code)
-                if (reresolved) error("Download refused after ${position}B (HTTP ${response.code})")
-                reresolved = true
-                Log.w(TAG, "re-resolving $videoId after HTTP ${response.code} at $position")
-                url = StreamResolver.resolveForDownload(videoId, maxKbps, requireM4a).url
-                // Resolving again re-runs the whole client walk, and a
-                // different client can answer with a different format. Resuming
-                // one stream into the middle of another produces a file that is
-                // the right length and unplayable, so a length that has moved
-                // is a failure rather than something to work around.
-                if (contentLength(url) != total) error("The stream changed mid-download — try again")
-                continue
-            }
-
-            response.use {
-                if (it.code !in 200..299) error("Download failed (HTTP ${it.code})")
-                val body = it.body ?: error("Download failed: empty response")
-                val source = body.byteStream()
-                var readForChunk = 0L
-                while (readForChunk < length) {
-                    coroutineContext.ensureActive()
-                    val wanted = minOf(buffer.size.toLong(), length - readForChunk).toInt()
-                    val read = source.read(buffer, 0, wanted)
-                    if (read == -1) break
-                    sink.write(buffer, 0, read)
-                    readForChunk += read
-                    position += read
-                    onProgress(position, total)
+                val response = try {
+                    open(url, position, length)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (chunkAttempts >= maxChunkAttempts) {
+                        Log.w(TAG, "range at $position failed for $videoId after $maxChunkAttempts attempts: ${e.message}")
+                        throw e
+                    }
+                    Log.w(TAG, "range at $position for $videoId transient error ($chunkAttempts/$maxChunkAttempts): ${e.message}, retrying in ${300L * chunkAttempts}ms...")
+                    delay(300L * chunkAttempts)
+                    continue
                 }
-                // A range that stops short is not fatal on its own — the next
-                // pass simply asks for what is left — but one that yields
-                // nothing at all would loop here forever.
-                if (readForChunk == 0L) error("Download stalled at ${position}B")
+
+                // A URL that served its opening and then refuses is the one failure
+                // worth a second attempt: it means the identity behind it has been
+                // stood down mid-download, not that the track is gone. Telling the
+                // resolver is what stops the next track failing the same way.
+                if (response.code in REFUSAL_CODES) {
+                    response.close()
+                    StreamResolver.onPlaybackRefused(url, response.code)
+                    if (reresolved) error("Download refused after ${position}B (HTTP ${response.code})")
+                    reresolved = true
+                    Log.w(TAG, "re-resolving $videoId after HTTP ${response.code} at $position")
+                    url = StreamResolver.resolveForDownload(videoId, maxKbps, requireM4a, strictM4a = false).url
+                    if (contentLength(url) != total) error("The stream changed mid-download — try again")
+                    break
+                }
+
+                try {
+                    response.use {
+                        if (it.code !in 200..299) error("Download failed (HTTP ${it.code})")
+                        val body = it.body ?: error("Download failed: empty response")
+                        val source = body.byteStream()
+                        var readForChunk = 0L
+                        while (readForChunk < length) {
+                            coroutineContext.ensureActive()
+                            val wanted = minOf(buffer.size.toLong(), length - readForChunk).toInt()
+                            val read = source.read(buffer, 0, wanted)
+                            if (read == -1) break
+                            sink.write(buffer, 0, read)
+                            readForChunk += read
+                            position += read
+                            onProgress(position, total)
+                        }
+                        if (readForChunk == 0L && position < total) error("Download stalled at ${position}B")
+                    }
+                    chunkDone = true
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (chunkAttempts >= maxChunkAttempts) {
+                        Log.w(TAG, "read error at $position for $videoId after $maxChunkAttempts attempts: ${e.message}")
+                        throw e
+                    }
+                    Log.w(TAG, "read error at $position for $videoId ($chunkAttempts/$maxChunkAttempts): ${e.message}, retrying chunk...")
+                    delay(300L * chunkAttempts)
+                }
             }
         }
 

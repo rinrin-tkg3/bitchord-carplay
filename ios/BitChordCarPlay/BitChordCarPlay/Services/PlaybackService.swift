@@ -333,11 +333,16 @@ public class PlaybackService: NSObject, ObservableObject {
 
         // Remote Seek occurred from Android host
         if let seekSeq = newState.seekSeq, seekSeq > self.lastAppliedSeekSeq {
+            let wasRecentUserSeek = Date().timeIntervalSince(self.lastUserActionTime) < 1.5
             self.lastAppliedSeekSeq = seekSeq
-            let targetMs = newState.wantedSeekMs ?? newState.positionMs
-            if isRoutedToIphone {
-                seekTo(positionMs: targetMs, notifyHost: false)
-                reportPlaybackToHost()
+            if !wasRecentUserSeek {
+                let targetMs = newState.wantedSeekMs ?? newState.positionMs
+                if isRoutedToIphone {
+                    seekTo(positionMs: targetMs, notifyHost: false)
+                    reportPlaybackToHost()
+                } else {
+                    self.currentPositionSec = Double(max(0, targetMs)) / 1000.0
+                }
             }
         }
 
@@ -690,7 +695,6 @@ public class PlaybackService: NSObject, ObservableObject {
         }
         if notifyHost {
             self.lastUserActionTime = Date()
-            self.lastAppliedSeekSeq += 1
             sendAction("seek", params: ["positionMs": positionMs])
             reportPlaybackToHost()
         }
@@ -726,7 +730,15 @@ public class PlaybackService: NSObject, ObservableObject {
         guard state?.activeOnIphone == true else { return }
         guard let mediaId = currentLoadedMediaId ?? state?.mediaId,
               let url = URL(string: "\(baseUrl)/api/report?cid=ios_carplay") else { return }
-        let isPlayingNow = (player?.timeControlStatus == .playing || (player?.rate ?? 0) > 0) && !ended
+        let inGracePeriod = Date().timeIntervalSince(self.lastUserActionTime) < 1.5
+        let isPlayingNow: Bool
+        if ended {
+            isPlayingNow = false
+        } else if inGracePeriod {
+            isPlayingNow = self.userWantsPlay
+        } else {
+            isPlayingNow = (player?.timeControlStatus == .playing || (player?.rate ?? 0) > 0)
+        }
         let isBuffering = player?.currentItem?.isPlaybackLikelyToKeepUp == false && isPlayingNow
         let payload: [String: Any] = [
             "mediaId": mediaId,

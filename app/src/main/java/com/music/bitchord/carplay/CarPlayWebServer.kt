@@ -46,6 +46,7 @@ import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.Collections
 import java.util.LinkedHashMap
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.min
 
@@ -1099,9 +1100,16 @@ object CarPlayWebServer {
                             else -> -1L
                         }
                         if (pos >= 0L) {
-                            mainHandler.post {
-                                CarPlayWebBridge.speaker?.takeIf { it.active }?.seekTo(pos)
-                                controller?.onSeekTo(pos)
+                            if (speaker?.active == true) {
+                                speaker.seekTo(pos)
+                            } else {
+                                val player = CarPlayWebBridge.localPlayerProvider?.invoke()
+                                if (player != null) {
+                                    player.seekTo(pos)
+                                } else {
+                                    controller?.onSeekTo(pos)
+                                }
+                                CarPlayWebBridge.updatePlaybackSnapshot()
                             }
                         }
                     }
@@ -1250,6 +1258,20 @@ object CarPlayWebServer {
             writeResponse(out, "200 OK", localArt.mime, localArt.bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
             return
         }
+        val diskCacheDir = File(context.cacheDir, "carplay_artwork")
+        val urlHash = MessageDigest.getInstance("SHA-256")
+            .digest(url.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+        val diskFile = File(diskCacheDir, "$urlHash.jpg")
+        if (diskFile.exists() && diskFile.length() > 0L) {
+            val bytes = runCatching { diskFile.readBytes() }.getOrNull()
+            if (bytes != null && bytes.isNotEmpty()) {
+                val contentType = "image/jpeg"
+                artworkCache[url] = CachedArtwork(bytes, contentType)
+                writeResponse(out, "200 OK", contentType, bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
+                return
+            }
+        }
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             writeResponse(out, "404 Not Found", "text/plain", ByteArray(0))
             return
@@ -1265,6 +1287,10 @@ object CarPlayWebServer {
                 val bytes = resp.body?.bytes() ?: ByteArray(0)
                 if (bytes.isNotEmpty() && bytes.size < 2_000_000) {
                     artworkCache[url] = CachedArtwork(bytes, contentType)
+                    runCatching {
+                        if (!diskCacheDir.exists()) diskCacheDir.mkdirs()
+                        diskFile.writeBytes(bytes)
+                    }
                 }
                 writeResponse(out, "200 OK", contentType, bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
             }
@@ -1620,6 +1646,31 @@ object CarPlayWebServer {
                 return
             }
             Log.w(TAG, "Local audio streaming failed for $videoId; falling back to remote stream")
+        }
+
+        // Check if track is cached in ExoPlayer AudioCache: zero cellular data usage!
+        val cachedCopy = runCatching { com.music.bitchord.playback.AudioCache.completeCopyOf(videoId) }.getOrNull()
+        if (cachedCopy != null) {
+            val context = BitChordApplication.instance
+            val tempCacheDir = File(context.cacheDir, "audiocache_ios")
+            if (!tempCacheDir.exists()) tempCacheDir.mkdirs()
+            val tempFile = File(tempCacheDir, "$videoId.${cachedCopy.extension}")
+            val isReady = if (tempFile.exists() && tempFile.length() == cachedCopy.length) {
+                true
+            } else {
+                runCatching {
+                    runBlocking(Dispatchers.IO) {
+                        tempFile.outputStream().use { fos ->
+                            com.music.bitchord.playback.AudioCache.copyOut(cachedCopy, fos) { _, _ -> }
+                        }
+                    }
+                    tempFile.exists() && tempFile.length() > 0L
+                }.getOrDefault(false)
+            }
+            if (isReady && handleLocalAudioStream(method, videoId, Uri.fromFile(tempFile).toString(), rangeHeader, out)) {
+                Log.i(TAG, "Served $videoId from AudioCache complete copy (zero cellular data)")
+                return
+            }
         }
 
         val resolved = runBlocking(Dispatchers.IO) { resolveIosStream(videoId) }

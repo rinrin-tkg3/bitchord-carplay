@@ -115,6 +115,7 @@ object Downloads {
     val saved: StateFlow<Map<String, String>> = _saved.asStateFlow()
 
     private val _savedMetadata = MutableStateFlow<Map<String, SavedSongMetadata>>(emptyMap())
+    internal val savedMetadata: StateFlow<Map<String, SavedSongMetadata>> = _savedMetadata.asStateFlow()
 
     private val _collections = MutableStateFlow<Map<String, SavedCollection>>(emptyMap())
 
@@ -182,6 +183,9 @@ object Downloads {
      */
     fun enqueue(context: Context, song: Song, from: String? = null) {
         val id = song.videoId
+        if (from == "AutoDownload") {
+            AutoDownloadManager.markQueued(id)
+        }
         // A copy straight out of the song cache spends no data, so the Wi-Fi
         // rule has nothing to say about it.
         if (!AppSettings.downloadsAllowedNow && !servableFromCache(id)) {
@@ -691,6 +695,8 @@ object Downloads {
         // is both, and an album page's rows are neither.
         val album = fetched.albumName?.takeIf { it.isNotBlank() }
             ?: asked.albumName?.takeIf { it.isNotBlank() }
+        val isAuto = ids.any { AutoDownloadManager.isQueuedForAutoDownload(it) } ||
+            ids.any { id -> DownloadSession.state.value.items.any { it.videoId == id && it.from == "AutoDownload" } }
         val metaAsked = SavedSongMetadata(
             videoId = asked.videoId,
             title = asked.title,
@@ -701,6 +707,7 @@ object Downloads {
             uri = uri.toString(),
             downloadFormat = downloadFormat,
             dateAddedSeconds = dateAddedSeconds,
+            isAutoDownloaded = isAuto,
         )
         val metaFetched = SavedSongMetadata(
             videoId = fetched.videoId,
@@ -712,6 +719,7 @@ object Downloads {
             uri = uri.toString(),
             downloadFormat = downloadFormat,
             dateAddedSeconds = dateAddedSeconds,
+            isAutoDownloaded = isAuto,
         )
         record(
             saved = { it + ids.associateWith { id -> uri.toString() } },
@@ -1274,7 +1282,7 @@ object Downloads {
         val isExport = AppSettings.exportDownloads.value
         val isAutoDownload = AutoDownloadManager.isQueuedForAutoDownload(track.videoId)
         val requireM4a = isExport || isAutoDownload
-        val strictM4a = isExport
+        val strictM4a = false
         val stream = StreamResolver.resolveForDownload(track.videoId, quality.maxKbps, requireM4a = requireM4a, strictM4a = strictM4a)
         val isM4a = stream.downloadExtension == "m4a"
         return Route(
@@ -1649,6 +1657,7 @@ internal data class SavedSongMetadata(
     val downloadFormat: String? = null,
     /** Stable creation time for downloads that MediaStore does not index. */
     val dateAddedSeconds: Long? = null,
+    val isAutoDownloaded: Boolean = false,
 )
 
 /**
