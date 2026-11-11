@@ -166,7 +166,7 @@ object MediaTagger {
         return persistArtwork(context, sourceUrl, artwork)
     }
 
-    private fun cachedArtwork(context: Context, sourceUrl: String): Artwork? = runCatching {
+    internal fun cachedArtwork(context: Context, sourceUrl: String): Artwork? = runCatching {
         artworkFile(context, sourceUrl).takeIf { it.isFile }
             ?.readBytes()
             ?.takeIf { it.isNotEmpty() }

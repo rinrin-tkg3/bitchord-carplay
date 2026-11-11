@@ -1175,6 +1175,13 @@ object Downloads {
                 val savedUri = destination.commit()
                 pending = null
                 remember(song, track, savedUri, route.downloadFormat, artworkUri)
+                if (route.extension == "webm") {
+                    kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                        runCatching {
+                            com.music.bitchord.carplay.LocalAudioTranscoder.getOrTranscode(context, track.videoId, savedUri)
+                        }
+                    }
+                }
                 DownloadSession.done(id)
                 clear(id)
                 Log.d(TAG, "saved $name")
