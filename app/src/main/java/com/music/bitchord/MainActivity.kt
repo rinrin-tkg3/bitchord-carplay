@@ -1165,12 +1165,16 @@ private fun BitChordApp(
     val togglePlayPause: () -> Unit = {
         controller?.let { c ->
             val party = ListenTogether.state.value
+            val speaker = com.music.bitchord.carplay.CarPlayWebBridge.speaker?.takeIf { it.active }
+            val currentlyPlaying = c.isPlaying || speaker?.isPlaying == true
             if (party.controlsLocked && !party.playback.isPlaying && !c.isPlaying) {
                 showHostOnlyNotice()
-            } else if (c.isPlaying) {
+            } else if (currentlyPlaying) {
                 c.pause()
+                speaker?.pause()
             } else {
                 c.play()
+                speaker?.play()
             }
         }
     }
