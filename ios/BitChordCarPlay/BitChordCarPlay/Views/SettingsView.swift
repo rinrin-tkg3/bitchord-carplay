@@ -7,6 +7,7 @@ public struct SettingsView: View {
     @State private var inputHost: String = ""
     @State private var inputPort: String = ""
     @State private var testStatus: String? = nil
+    @State private var showScanner: Bool = false
 
     public init() {}
 
@@ -74,6 +75,20 @@ public struct SettingsView: View {
                         Text(playback.discoveryStatusText)
                             .font(.caption)
                             .foregroundColor(.gray)
+                    }
+
+                    Button(action: {
+                        showScanner = true
+                    }) {
+                        HStack {
+                            Image(systemName: "camera.viewfinder")
+                                .foregroundColor(.blue)
+                            Text("カメラでQRコードを読み取り")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
                     }
 
                     HStack {
@@ -195,6 +210,17 @@ public struct SettingsView: View {
                 }
             }
             .navigationBarTitle("設定", displayMode: .inline)
+            .sheet(isPresented: $showScanner) {
+                QRCodeScannerSheet(
+                    onScanned: { code in
+                        showScanner = false
+                        handleScannedQr(code)
+                    },
+                    onCancel: {
+                        showScanner = false
+                    }
+                )
+            }
             .navigationBarItems(
                 leading: Button("キャンセル") {
                     presentationMode.wrappedValue.dismiss()
@@ -246,5 +272,244 @@ public struct SettingsView: View {
                 }
             }
         }.resume()
+    }
+
+    private func handleScannedQr(_ raw: String) {
+        var str = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if str.hasPrefix("http://") {
+            str = String(str.dropFirst("http://".count))
+        } else if str.hasPrefix("https://") {
+            str = String(str.dropFirst("https://".count))
+        } else if str.hasPrefix("bitchord://") {
+            str = String(str.dropFirst("bitchord://".count))
+        }
+        if let slashIndex = str.firstIndex(of: "/") {
+            str = String(str[..<slashIndex])
+        }
+        if let qIndex = str.firstIndex(of: "?") {
+            str = String(str[..<qIndex])
+        }
+        if str.contains(":") {
+            let parts = str.components(separatedBy: ":")
+            let host = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !host.isEmpty {
+                inputHost = host
+                playback.serverHost = host
+            }
+            if parts.count >= 2, let port = Int(parts[1].trimmingCharacters(in: .whitespacesAndNewlines)), port > 0 {
+                inputPort = String(port)
+                playback.serverPort = port
+            }
+        } else if !str.isEmpty {
+            inputHost = str
+            playback.serverHost = str
+        }
+        saveSettings()
+        testConnection()
+    }
+}
+
+// MARK: - Camera QR Scanner Components
+
+import AVFoundation
+import AudioToolbox
+
+public struct QRCodeScannerSheet: View {
+    var onScanned: (String) -> Void
+    var onCancel: () -> Void
+
+    public var body: some View {
+        NavigationView {
+            ZStack {
+                QRCodeScannerView(onScanned: onScanned)
+                    .edgesIgnoringSafeArea(.all)
+
+                VStack {
+                    Spacer()
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.white.opacity(0.85), lineWidth: 3)
+                            .frame(width: 240, height: 240)
+                            .background(Color.black.opacity(0.12))
+                    }
+                    Text("Galaxy の画面にある QR コードを枠内に写してください")
+                        .font(.footnote)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.black.opacity(0.70))
+                        .cornerRadius(8)
+                        .padding(.top, 24)
+                    Spacer()
+                }
+            }
+            .navigationBarTitle("QRコードをスキャン", displayMode: .inline)
+            .navigationBarItems(
+                leading: Button("キャンセル") {
+                    onCancel()
+                }
+            )
+        }
+    }
+}
+
+public protocol ScannerViewControllerDelegate: AnyObject {
+    func didScanCode(_ code: String)
+}
+
+public struct QRCodeScannerView: UIViewControllerRepresentable {
+    var onScanned: (String) -> Void
+
+    public func makeUIViewController(context: Context) -> ScannerViewController {
+        let vc = ScannerViewController()
+        vc.delegate = context.coordinator
+        return vc
+    }
+
+    public func updateUIViewController(_ uiViewController: ScannerViewController, context: Context) {}
+
+    public func makeCoordinator() -> Coordinator {
+        Coordinator(onScanned: onScanned)
+    }
+
+    public class Coordinator: NSObject, ScannerViewControllerDelegate {
+        var onScanned: (String) -> Void
+        init(onScanned: @escaping (String) -> Void) {
+            self.onScanned = onScanned
+        }
+        public func didScanCode(_ code: String) {
+            onScanned(code)
+        }
+    }
+}
+
+public class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+    public weak var delegate: ScannerViewControllerDelegate?
+    private var captureSession: AVCaptureSession?
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var hasScanned = false
+
+    public override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        checkCameraPermission()
+    }
+
+    private func checkCameraPermission() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            setupCamera()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        self?.setupCamera()
+                    } else {
+                        self?.showPermissionDenied()
+                    }
+                }
+            }
+        default:
+            showPermissionDenied()
+        }
+    }
+
+    private func setupCamera() {
+        let session = AVCaptureSession()
+        guard let device = AVCaptureDevice.default(for: .video) else {
+            showNoCamera()
+            return
+        }
+        guard let input = try? AVCaptureDeviceInput(device: device) else {
+            showNoCamera()
+            return
+        }
+        if session.canAddInput(input) {
+            session.addInput(input)
+        }
+        let output = AVCaptureMetadataOutput()
+        if session.canAddOutput(output) {
+            session.addOutput(output)
+            output.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
+            output.metadataObjectTypes = [.qr]
+        }
+        let preview = AVCaptureVideoPreviewLayer(session: session)
+        preview.frame = view.bounds
+        preview.videoGravity = .resizeAspectFill
+        view.layer.addSublayer(preview)
+        self.previewLayer = preview
+        self.captureSession = session
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            session.startRunning()
+        }
+    }
+
+    public override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer?.frame = view.bounds
+    }
+
+    public override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if captureSession?.isRunning == true {
+            captureSession?.stopRunning()
+        }
+    }
+
+    public func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
+        guard !hasScanned else { return }
+        if let meta = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+           meta.type == .qr,
+           let str = meta.stringValue,
+           !str.isEmpty {
+            hasScanned = true
+            AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
+            delegate?.didScanCode(str)
+        }
+    }
+
+    private func showPermissionDenied() {
+        let label = UILabel()
+        label.text = "カメラへのアクセスが許可されていません。\n「設定」アプリからカメラの使用を許可してください。"
+        label.textColor = .white
+        label.textAlignment = .center
+        label.numberOfLines = 0
+        label.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(label)
+
+        let btn = UIButton(type: .system)
+        btn.setTitle("設定を開く", for: .normal)
+        btn.translatesAutoresizingMaskIntoConstraints = false
+        btn.addTarget(self, action: #selector(openSettings), for: .touchUpInside)
+        view.addSubview(btn)
+
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -20),
+            label.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20),
+            btn.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 16),
+            btn.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+        ])
+    }
+
+    private func showNoCamera() {
+        let label = UILabel()
+        label.text = "カメラが見つかりません"
+        label.textColor = .white
+        label.textAlignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+        ])
+    }
+
+    @objc private func openSettings() {
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
     }
 }

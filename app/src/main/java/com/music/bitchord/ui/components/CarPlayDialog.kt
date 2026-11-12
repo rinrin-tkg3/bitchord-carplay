@@ -1,16 +1,11 @@
 package com.music.bitchord.ui.components
 
-import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -60,7 +55,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.music.bitchord.carplay.CarPlayWebBridge
 import com.music.bitchord.data.settings.AppSettings
@@ -77,30 +71,11 @@ fun CarPlaySheet(
     val serverEnabled by AppSettings.carPlayServerEnabled.collectAsStateWithLifecycle()
     val serverRunning by CarPlayWebBridge.serverRunning.collectAsStateWithLifecycle()
     val endpoints by CarPlayWebBridge.endpoints.collectAsStateWithLifecycle()
-    val localWifiState by CarPlayWebBridge.localWifiState.collectAsStateWithLifecycle()
     val connectedClients by CarPlayWebBridge.connectedClients.collectAsStateWithLifecycle()
     val carPlaySession by CarPlayWebBridge.carPlaySession.collectAsStateWithLifecycle()
-    val syncScreen by CarPlayWebBridge.syncScreenNavigation.collectAsStateWithLifecycle()
     val serverPort by CarPlayWebBridge.port.collectAsStateWithLifecycle()
 
-    // 0 = Open BitChord URL QR, 1 = Join Wi-Fi QR (when Local Wi-Fi is active)
-    var qrMode by remember { mutableIntStateOf(0) }
     var selectedEndpointIdx by remember { mutableIntStateOf(0) }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions(),
-    ) { result ->
-        val allGranted = result.values.all { it }
-        if (allGranted || hasLocalWifiPermission(context)) {
-            CarPlayWebBridge.startLocalWifiRadio()
-        } else {
-            Toast.makeText(
-                context,
-                "ローカルWi-Fi電波を出すには付近のWi-Fiデバイス権限を許可してください",
-                Toast.LENGTH_LONG,
-            ).show()
-        }
-    }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -146,11 +121,11 @@ fun CarPlaySheet(
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = "CarPlay / iPhone 連携",
+                        text = "CarPlay / iPhone 連携設定",
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                     )
                     Text(
-                        text = "ローカル専用Wi-Fi電波またはテザリングでiPhone 7と同期再生",
+                        text = "Wi-Fiテザリングまたは同一ネットワークでiPhoneと同期再生",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -173,7 +148,7 @@ fun CarPlaySheet(
             val statusText = when {
                 carPlaySession -> "iPhone / CarPlay から音声出力中（双方向同期アクティブ）"
                 connectedClients > 0 -> "iPhone 接続中 ($connectedClients 台) — 画面・操作同期中"
-                serverRunning -> "サーバー稼働中 — iPhoneのSafariで下記URLを開いてください"
+                serverRunning -> "サーバー稼働中 — iPhoneのアプリまたはSafariで接続してください"
                 else -> "連携サーバー停止中"
             }
 
@@ -192,25 +167,11 @@ fun CarPlaySheet(
                 )
             }
 
-            // QR Code Card (Scan with iPhone Camera)
+            // QR Code Card (Scan with iPhone Camera or BitChord App)
             val safeEndpointIdx = selectedEndpointIdx.coerceIn(0, (endpoints.size - 1).coerceAtLeast(0))
             val activeEndpoint = endpoints.getOrNull(safeEndpointIdx)
-            val targetWebUrl = when {
-                localWifiState.active && qrMode == 0 && activeEndpoint != null -> activeEndpoint.url
-                localWifiState.active -> localWifiState.url
-                activeEndpoint != null -> activeEndpoint.url
-                else -> ""
-            }
-            val wifiQrPayload = if (localWifiState.active && localWifiState.ssid.isNotBlank()) {
-                "WIFI:S:${localWifiState.ssid};T:WPA;P:${localWifiState.password};;"
-            } else {
-                ""
-            }
-            val effectiveQrContent = if (localWifiState.active && qrMode == 1 && wifiQrPayload.isNotBlank()) {
-                wifiQrPayload
-            } else {
-                targetWebUrl
-            }
+            val targetWebUrl = activeEndpoint?.url ?: "http://192.168.43.1:$serverPort"
+            val effectiveQrContent = targetWebUrl
 
             Column(
                 modifier = Modifier
@@ -243,29 +204,7 @@ fun CarPlaySheet(
                     )
                 }
 
-                if (localWifiState.active) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f))
-                            .padding(4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        QrModeTab(
-                            title = "① Wi-Fi 接続 QR",
-                            selected = qrMode == 1,
-                            onClick = { qrMode = 1 },
-                            modifier = Modifier.weight(1f),
-                        )
-                        QrModeTab(
-                            title = "② BitChord を開く QR",
-                            selected = qrMode == 0,
-                            onClick = { qrMode = 0 },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                } else if (endpoints.size > 1) {
+                if (endpoints.size > 1) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -298,18 +237,14 @@ fun CarPlaySheet(
                         )
                     }
                     Text(
-                        text = if (localWifiState.active && qrMode == 1) {
-                            "iPhoneの標準カメラを向けると「ネットワーク『${localWifiState.ssid}』に接続」が出ます"
-                        } else {
-                            "iPhoneの標準カメラを向けると「Safariで『$targetWebUrl』を開く」が出ます"
-                        },
+                        text = "iPhoneのBitChordアプリのカメラボタン、または標準カメラで読み取ると接続先が自動設定されます",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
                     )
                 } else {
                     Text(
-                        text = "下の「通常のWi-Fiテザリング設定を開く」でテザリングをオンにするか、「ローカル専用Wi-Fi電波を発信」をオンにするとここにQRコードが表示されます。",
+                        text = "下の「通常のWi-Fiテザリング設定を開く」でテザリングをオンにすると、ここに接続用QRコードが表示されます。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -318,7 +253,7 @@ fun CarPlaySheet(
                 }
             }
 
-            // One-tap Normal Tethering (Mobile Hotspot) Shortcut Card (Recommended when using Google Maps)
+            // One-tap Normal Tethering (Mobile Hotspot) Shortcut Card
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -342,11 +277,11 @@ fun CarPlaySheet(
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = "通常のWi-Fiテザリング設定を開く（Googleマップ併用におすすめ）",
+                        text = "通常のWi-Fiテザリング設定を開く",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                     )
                     Text(
-                        text = "Galaxyのモバイルホットスポットをオンにすると、iPhone側の設定不要でGoogleマップもBitChordも同時に使えます（上のQRコードで即接続）",
+                        text = "Galaxyのモバイルホットスポットをオンにすると、iPhoneからGoogleマップもBitChordも同時に利用できます",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -358,127 +293,6 @@ fun CarPlaySheet(
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(20.dp),
                 )
-            }
-
-            // Local Direct Wi-Fi Radio Card (No Carrier Tethering Needed + Built-in Proxy for Google Maps)
-            val radioAccent = if (localWifiState.active) Color(0xFF30D158) else MaterialTheme.colorScheme.primary
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(
-                        if (localWifiState.active) {
-                            Color(0xFF30D158).copy(alpha = 0.11f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.60f)
-                        },
-                    )
-                    .border(
-                        width = 1.dp,
-                        color = if (localWifiState.active) {
-                            Color(0xFF30D158).copy(alpha = 0.45f)
-                        } else {
-                            MaterialTheme.colorScheme.outline.copy(alpha = 0.20f)
-                        },
-                        shape = RoundedCornerShape(16.dp),
-                    )
-                    .padding(vertical = 6.dp),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            if (localWifiState.active || localWifiState.starting) {
-                                CarPlayWebBridge.stopLocalWifiRadio()
-                            } else if (hasLocalWifiPermission(context)) {
-                                CarPlayWebBridge.startLocalWifiRadio()
-                            } else {
-                                permissionLauncher.launch(requiredLocalWifiPermissions())
-                            }
-                        }
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.WifiTethering,
-                        contentDescription = null,
-                        tint = radioAccent,
-                        modifier = Modifier.size(24.dp),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = "ローカル専用 Wi-Fi 電波を発信",
-                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
-                        )
-                        Text(
-                            text = if (localWifiState.starting) {
-                                "直接通信用の Wi-Fi 電波を立ち上げています..."
-                            } else if (localWifiState.active) {
-                                "${localWifiState.modeLabel} — QR読み取り＆内蔵プロキシでGoogleマップも対応"
-                            } else {
-                                "テザリングを使わずにGalaxyからiPhone専用の直接Wi-Fi電波を出します"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    IosSwitch(
-                        checked = localWifiState.active || localWifiState.starting,
-                        onCheckedChange = { enable ->
-                            if (!enable) {
-                                CarPlayWebBridge.stopLocalWifiRadio()
-                            } else if (hasLocalWifiPermission(context)) {
-                                CarPlayWebBridge.startLocalWifiRadio()
-                            } else {
-                                permissionLauncher.launch(requiredLocalWifiPermissions())
-                            }
-                        },
-                    )
-                }
-
-                if (localWifiState.error != null) {
-                    Text(
-                        text = localWifiState.error.orEmpty(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                    )
-                }
-
-                if (localWifiState.active) {
-                    val pacUrl = "http://${localWifiState.ip}:$serverPort/proxy.pac"
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), thickness = 0.5.dp)
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        CredentialRow(
-                            label = "1. ネットワーク名 (SSID) — 上の「① Wi-Fi 接続 QR」でも接続可",
-                            value = localWifiState.ssid,
-                            onCopy = { copyToClipboard(context, localWifiState.ssid, "SSID") },
-                        )
-                        CredentialRow(
-                            label = "2. Wi-Fi パスワード",
-                            value = localWifiState.password,
-                            onCopy = { copyToClipboard(context, localWifiState.password, "パスワード") },
-                        )
-                        CredentialRow(
-                            label = "3. iPhoneのSafariで開く専用固定URL — 上の「② BitChord を開く QR」",
-                            value = localWifiState.url,
-                            highlight = true,
-                            onCopy = { copyToClipboard(context, localWifiState.url, "URL") },
-                        )
-                        CredentialRow(
-                            label = "4. ローカルWi-FiでGoogleマップを使う場合（iPhoneのWi-Fi詳細 > HTTPプロキシ > 自動）",
-                            value = pacUrl,
-                            onCopy = { copyToClipboard(context, pacUrl, "プロキシ自動設定URL") },
-                        )
-                    }
-                }
             }
 
             // Switches
@@ -533,7 +347,7 @@ fun CarPlaySheet(
                         .padding(16.dp),
                 ) {
                     Text(
-                        text = "ローカルIPアドレスが見つかりません。\n上の「ローカル専用 Wi-Fi 電波を発信」をオンにするか、テザリングをオンにしてください。",
+                        text = "ローカルIPアドレスが見つかりません。テザリングをオンにするか、同一Wi-Fiネットワークに接続してください。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -589,16 +403,14 @@ fun CarPlaySheet(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    text = "CarPlay で Googleマップと併用する方法（2通り）",
+                    text = "CarPlay / iPhone 連携の使い方",
                     style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                 )
                 Text(
-                    text = "【方法A：通常のWi-Fiテザリング（一番簡単・設定不要）】\n" +
-                        "1. 上の「通常のWi-Fiテザリング設定を開く」からGalaxyのモバイルホットスポットをオンにします。\n" +
-                        "2. iPhoneをテザリングWi-Fiに繋ぎ、上のQRコードをiPhoneのカメラで読み取るだけでBitChord CarPlayアプリと接続され、Googleマップもそのまま使えます。\n\n" +
-                        "【方法B：ローカル専用Wi-Fi電波でGoogleマップも使う場合】\n" +
-                        "1. 「ローカル専用Wi-Fi電波を発信」をオンにし、「① Wi-Fi接続QR」をiPhoneカメラで読み取って接続します。\n" +
-                        "2. iPhoneの「設定 > Wi-Fi > DIRECT-BC-BitChord右の(i) > 一番下のHTTPプロキシ > 自動」に `http://192.168.49.1:$serverPort/proxy.pac`（または手動でサーバー `192.168.49.1` / ポート `$serverPort`）を1回設定すると、次回からローカル専用Wi-FiのままGalaxyの5G/4G経由でGoogleマップも通信できます。",
+                    text = "1. 上の「通常のWi-Fiテザリング設定を開く」からGalaxyのモバイルホットスポット（テザリング）をオンにします。\n" +
+                        "2. iPhoneをGalaxyのWi-Fiに接続します。\n" +
+                        "3. iPhoneのBitChordアプリ（設定 > 接続先 Galaxy）の「カメラでQRコードを読み取り」ボタンを押して上のQRコードをスキャンするか、標準カメラでスキャンして接続します。\n" +
+                        "4. 接続されると、Galaxyで再生中の曲、アートワーク、キュー、シークバーがiPhoneおよび車載CarPlayに完全同期します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     lineHeight = 18.sp,
@@ -619,86 +431,17 @@ private fun QrModeTab(
         modifier = modifier
             .clip(RoundedCornerShape(9.dp))
             .background(
-                if (selected) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    Color.Transparent
-                },
+                if (selected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .padding(vertical = 8.dp, horizontal = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = title,
-            style = MaterialTheme.typography.labelMedium.copy(
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            ),
-            color = if (selected) {
-                MaterialTheme.colorScheme.onPrimary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-private fun openTetheringSettings(context: Context) {
-    val candidates = listOf(
-        Intent().setClassName("com.android.settings", "com.android.settings.Settings\$WifiTetherSettingsActivity"),
-        Intent("android.settings.TETHER_SETTINGS"),
-        Intent(Settings.ACTION_WIRELESS_SETTINGS),
-        Intent(Settings.ACTION_SETTINGS),
-    )
-    for (intent in candidates) {
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (runCatching { context.startActivity(intent) }.isSuccess) {
-            return
-        }
-    }
-}
-
-@Composable
-private fun CredentialRow(
-    label: String,
-    value: String,
-    highlight: Boolean = false,
-    onCopy: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f))
-            .clickable(onClick = onCopy)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = value,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    color = if (highlight) Color(0xFF30D158) else MaterialTheme.colorScheme.onSurface,
-                ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Icon(
-            imageVector = Icons.Rounded.ContentCopy,
-            contentDescription = "コピー",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal),
+            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -736,20 +479,24 @@ private fun SwitchRow(
     }
 }
 
-private fun requiredLocalWifiPermissions(): Array<String> =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
-    } else {
-        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-    }
-
-private fun hasLocalWifiPermission(context: Context): Boolean =
-    requiredLocalWifiPermissions().all { perm ->
-        ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
-    }
-
 private fun copyToClipboard(context: Context, text: String, label: String = "URL") {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
     cm.setPrimaryClip(ClipData.newPlainText("BitChord $label", text))
     Toast.makeText(context, "${label}をコピーしました: $text", Toast.LENGTH_SHORT).show()
+}
+
+private fun openTetheringSettings(context: Context) {
+    val tetherSettingsIntent = Intent().apply {
+        action = Intent.ACTION_MAIN
+        setClassName("com.android.settings", "com.android.settings.TetherSettings")
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+    }
+    val fallbackIntent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+    }
+    try {
+        context.startActivity(tetherSettingsIntent)
+    } catch (_: Exception) {
+        runCatching { context.startActivity(fallbackIntent) }
+    }
 }

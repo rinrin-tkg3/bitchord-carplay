@@ -35,6 +35,8 @@
     </dict>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Galaxy (Android) の BitChord サーバーと通信して車載 CarPlay で音楽を再生します</string>
+    <key>NSCameraUsageDescription</key>
+    <string>GalaxyのBitChord画面に表示された接続用QRコードをスキャンして、IPアドレスとポートを自動設定します。</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_http._tcp</string>

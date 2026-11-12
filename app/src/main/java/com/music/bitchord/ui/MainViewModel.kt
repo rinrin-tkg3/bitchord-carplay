@@ -1928,22 +1928,57 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (added.isNotEmpty()) _home.value = UiState.Success(existing + added)
     }
 
+    private fun isHomeRecommendationShelf(title: String): Boolean {
+        val t = title.trim().lowercase(Locale.ROOT)
+        return t == "quick picks" ||
+            t == "クイック ミックス" ||
+            t == "おすすめ" ||
+            t == "あなたへのおすすめ" ||
+            t == "for you" ||
+            t == "mixed for you" ||
+            t.contains("おすすめ") ||
+            t.contains("quick")
+    }
+
     /** Refreshes the core feed without blanking the current Play page first. */
     private suspend fun refreshHome(identity: String?) = coroutineScope {
         val recent = if (_signedIn.value) async { YtMusicRepository.homeRecentlyPlayed() } else null
-        // Top Picks keeps to its hour; a pull refreshes the feed, not the
-        // picks, unless the hour has already turned over.
-        if (topPicksJob?.isActive != true) loadTopPicks(identity, rebuild = false)
+        // Rebuild Top Picks on manual pull-to-refresh so fresh content appears immediately
+        loadTopPicks(identity, rebuild = true)
+        val supplements = YtMusicRepository.HOME_SUPPLEMENT_BROWSE_IDS.map { browseId ->
+            async {
+                runCatching { YtMusicRepository.homeSupplement(browseId).getOrNull() }.getOrNull().orEmpty()
+            }
+        }
+        val existingShelves = (_home.value as? UiState.Success)?.data.orEmpty()
+        val previousRecItems = existingShelves.firstOrNull { isHomeRecommendationShelf(it.title) }?.items.orEmpty()
+
         YtMusicRepository.home().onSuccess { feed ->
             if (identity != listenerKey()) return@onSuccess
             homeContinuation = feed.continuation
             homeSeenTitles.clear()
-            val shelves = feed.shelves.withoutDismissed().withoutRepeatsOf(emptyList())
+            val baseShelves = feed.shelves.withoutDismissed().withoutRepeatsOf(emptyList())
                 .filter { homeSeenTitles.add(it.title.lowercase(Locale.ROOT)) }
-            if (shelves.isNotEmpty()) _home.value = UiState.Success(shelves)
+            val refreshedShelves = baseShelves.map { shelf ->
+                if (isHomeRecommendationShelf(shelf.title)) {
+                    val mergedItems = (shelf.items + previousRecItems)
+                        .distinctBy { it.videoId ?: it.browseId ?: it.title }
+                        .shuffled()
+                    shelf.copy(items = mergedItems)
+                } else if (shelf.layout == com.music.bitchord.data.model.ShelfLayout.LIST && shelf.items.size > 1) {
+                    shelf.copy(items = shelf.items.shuffled())
+                } else {
+                    shelf
+                }
+            }
+            if (refreshedShelves.isNotEmpty()) _home.value = UiState.Success(refreshedShelves)
         }
         recent?.await()?.onSuccess { shelf ->
             if (identity == listenerKey()) shelf?.let { publishHomeShelves(listOf(it), prepend = true) }
+        }
+        val supplementShelves = supplements.flatMap { it.await() }
+        if (identity == listenerKey() && supplementShelves.isNotEmpty()) {
+            publishHomeShelves(supplementShelves)
         }
     }
 

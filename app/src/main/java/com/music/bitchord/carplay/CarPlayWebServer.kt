@@ -1248,64 +1248,126 @@ object CarPlayWebServer {
         }
     }
 
-    private fun handleArtwork(url: String, out: OutputStream) {
-        if (url.isBlank()) {
-            writeResponse(out, "404 Not Found", "text/plain", ByteArray(0))
-            return
-        }
-        val cached = artworkCache[url]
-        if (cached != null) {
-            writeResponse(out, "200 OK", cached.contentType, cached.bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
-            return
-        }
-        val context = BitChordApplication.instance
-        val localArt = runCatching { com.music.bitchord.download.MediaTagger.cachedArtwork(context, url) }.getOrNull()
-        if (localArt != null && localArt.bytes.isNotEmpty()) {
-            artworkCache[url] = CachedArtwork(localArt.bytes, localArt.mime)
-            writeResponse(out, "200 OK", localArt.mime, localArt.bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
-            return
-        }
-        val diskCacheDir = File(context.cacheDir, "carplay_artwork")
-        val urlHash = MessageDigest.getInstance("SHA-256")
-            .digest(url.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
-        val diskFile = File(diskCacheDir, "$urlHash.jpg")
-        if (diskFile.exists() && diskFile.length() > 0L) {
-            val bytes = runCatching { diskFile.readBytes() }.getOrNull()
-            if (bytes != null && bytes.isNotEmpty()) {
-                val contentType = "image/jpeg"
-                artworkCache[url] = CachedArtwork(bytes, contentType)
-                writeResponse(out, "200 OK", contentType, bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
-                return
-            }
-        }
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            writeResponse(out, "404 Not Found", "text/plain", ByteArray(0))
-            return
-        }
-        try {
-            val req = Request.Builder().url(url).get().build()
-            Http.client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    writeResponse(out, "404 Not Found", "text/plain", ByteArray(0))
-                    return
-                }
-                val contentType = resp.header("Content-Type") ?: "image/jpeg"
-                val bytes = resp.body?.bytes() ?: ByteArray(0)
-                if (bytes.isNotEmpty() && bytes.size < 2_000_000) {
-                    artworkCache[url] = CachedArtwork(bytes, contentType)
-                    runCatching {
-                        if (!diskCacheDir.exists()) diskCacheDir.mkdirs()
-                        diskFile.writeBytes(bytes)
-                    }
-                }
-                writeResponse(out, "200 OK", contentType, bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
-            }
-        } catch (_: Exception) {
-            writeResponse(out, "404 Not Found", "text/plain", ByteArray(0))
-        }
-    }
-
+    private fun handleArtwork(url: String, out: OutputStream) {
+        if (url.isBlank()) {
+            writeResponse(out, "404 Not Found", "text/plain", ByteArray(0))
+            return
+        }
+        val cached = artworkCache[url]
+        if (cached != null) {
+            writeResponse(out, "200 OK", cached.contentType, cached.bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
+            return
+        }
+        val context = BitChordApplication.instance
+
+        // 1. Check local file or directory (e.g. downloaded songs with file:// or local path)
+        if (url.startsWith("file://") || url.startsWith("/")) {
+            val localPath = if (url.startsWith("file://")) {
+                runCatching { Uri.parse(url).path }.getOrNull() ?: url.removePrefix("file://")
+            } else {
+                url
+            }
+            val f = File(localPath)
+            if (f.exists() && f.isFile && f.length() > 0L) {
+                val bytes = runCatching { f.readBytes() }.getOrNull()
+                if (bytes != null && bytes.isNotEmpty()) {
+                    val mime = if (localPath.endsWith(".png", ignoreCase = true)) "image/png" else "image/jpeg"
+                    artworkCache[url] = CachedArtwork(bytes, mime)
+                    writeResponse(out, "200 OK", mime, bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
+                    return
+                }
+            }
+            // If f is directory or m3u8 playlist file, search for cover image inside the same directory
+            val folder = if (f.isDirectory) f else f.parentFile
+            val cover = folder?.listFiles()?.firstOrNull { it.nameWithoutExtension.equals("cover", ignoreCase = true) }
+            if (cover != null && cover.exists() && cover.length() > 0L) {
+                val bytes = runCatching { cover.readBytes() }.getOrNull()
+                if (bytes != null && bytes.isNotEmpty()) {
+                    val mime = if (cover.name.endsWith(".png", ignoreCase = true)) "image/png" else "image/jpeg"
+                    artworkCache[url] = CachedArtwork(bytes, mime)
+                    writeResponse(out, "200 OK", mime, bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
+                    return
+                }
+            }
+        }
+
+        // 2. Check Android ContentProvider URI (content://...)
+        if (url.startsWith("content://")) {
+            val uri = runCatching { Uri.parse(url) }.getOrNull()
+            if (uri != null) {
+                val bytes = runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+                if (bytes != null && bytes.isNotEmpty()) {
+                    val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
+                    artworkCache[url] = CachedArtwork(bytes, mime)
+                    writeResponse(out, "200 OK", mime, bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
+                    return
+                }
+            }
+        }
+
+        // 3. Check MediaTagger cached artwork (hash of original remote URL stored during download)
+        val localArt = runCatching { com.music.bitchord.download.MediaTagger.cachedArtwork(context, url) }.getOrNull()
+        if (localArt != null && localArt.bytes.isNotEmpty()) {
+            artworkCache[url] = CachedArtwork(localArt.bytes, localArt.mime)
+            writeResponse(out, "200 OK", localArt.mime, localArt.bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
+            return
+        }
+
+        // 4. Check disk cache in carplay_artwork
+        val diskCacheDir = File(context.cacheDir, "carplay_artwork")
+        val urlHash = MessageDigest.getInstance("SHA-256")
+            .digest(url.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+        val diskFile = File(diskCacheDir, "$urlHash.jpg")
+        if (diskFile.exists() && diskFile.length() > 0L) {
+            val bytes = runCatching { diskFile.readBytes() }.getOrNull()
+            if (bytes != null && bytes.isNotEmpty()) {
+                val contentType = "image/jpeg"
+                artworkCache[url] = CachedArtwork(bytes, contentType)
+                writeResponse(out, "200 OK", contentType, bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
+                return
+            }
+        }
+
+        // 5. Remote fetch or fallback YouTube thumbnail
+        val resolvedHttpUrl = when {
+            url.startsWith("http://") || url.startsWith("https://") -> url
+            url.length == 11 && !url.contains("/") && !url.contains(".") -> "https://i.ytimg.com/vi/$url/hqdefault.jpg"
+            url.contains("v=") -> {
+                val id = url.substringAfter("v=").substringBefore('&').substringBefore('/')
+                if (id.length == 11) "https://i.ytimg.com/vi/$id/hqdefault.jpg" else null
+            }
+            else -> null
+        }
+
+        if (resolvedHttpUrl == null) {
+            writeResponse(out, "404 Not Found", "text/plain", ByteArray(0))
+            return
+        }
+
+        try {
+            val req = Request.Builder().url(resolvedHttpUrl).get().build()
+            Http.client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    writeResponse(out, "404 Not Found", "text/plain", ByteArray(0))
+                    return
+                }
+                val contentType = resp.header("Content-Type") ?: "image/jpeg"
+                val bytes = resp.body?.bytes() ?: ByteArray(0)
+                if (bytes.isNotEmpty() && bytes.size < 2_000_000) {
+                    artworkCache[url] = CachedArtwork(bytes, contentType)
+                    runCatching {
+                        if (!diskCacheDir.exists()) diskCacheDir.mkdirs()
+                        diskFile.writeBytes(bytes)
+                    }
+                }
+                writeResponse(out, "200 OK", contentType, bytes, extraHeaders = mapOf("Cache-Control" to "public, max-age=86400"))
+            }
+        } catch (_: Exception) {
+            writeResponse(out, "404 Not Found", "text/plain", ByteArray(0))
+        }
+    }
+
     private fun isIosPlayable(headerBytes: ByteArray, uriStr: String): Pair<Boolean, String> {
         // Exclude unsupported package playlists (Offline DASH/HLS)
         if (uriStr.endsWith(".m3u8", ignoreCase = true) || uriStr.endsWith(".mpd", ignoreCase = true)) {

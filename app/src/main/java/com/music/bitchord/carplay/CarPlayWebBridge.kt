@@ -962,7 +962,11 @@ object CarPlayWebBridge {
                         title = meta.title?.toString().orEmpty(),
                         artist = meta.artist?.toString().orEmpty(),
                         album = meta.albumTitle?.toString(),
-                        thumbnailUrl = meta.artworkUri?.toString(),
+                        thumbnailUrl = meta.artworkUri?.toString()
+                            ?: com.music.bitchord.download.Downloads.savedMetadata.value[item.mediaId]?.thumbnailUrl
+                            ?: item.mediaId.takeIf { it.isNotBlank() && !it.startsWith("file://") && !it.startsWith("content://") }?.let {
+                                "https://i.ytimg.com/vi/$it/hqdefault.jpg"
+                            },
                         durationMs = itemDur,
                     ),
                 )
@@ -978,7 +982,11 @@ object CarPlayWebBridge {
                     title = currentSong.title,
                     artist = currentSong.artist,
                     album = currentSong.albumName,
-                    thumbnailUrl = currentSong.thumbnailUrl,
+                    thumbnailUrl = currentSong.thumbnailUrl
+                        ?: com.music.bitchord.download.Downloads.savedMetadata.value[currentSong.videoId]?.thumbnailUrl
+                        ?: currentSong.videoId.takeIf { it.isNotBlank() && !it.startsWith("file://") && !it.startsWith("content://") }?.let {
+                            "https://i.ytimg.com/vi/$it/hqdefault.jpg"
+                        },
                     durationMs = songDur,
                 ),
             )
@@ -1026,7 +1034,11 @@ object CarPlayWebBridge {
             title = currentSong?.title ?: curEntry?.title.orEmpty(),
             artist = currentSong?.artist ?: curEntry?.artist.orEmpty(),
             album = currentSong?.albumName ?: curEntry?.album,
-            thumbnailUrl = currentSong?.thumbnailUrl ?: curEntry?.thumbnailUrl,
+            thumbnailUrl = (currentSong?.thumbnailUrl ?: curEntry?.thumbnailUrl)
+                ?: (if (mediaId != null) com.music.bitchord.download.Downloads.savedMetadata.value[mediaId]?.thumbnailUrl else null)
+                ?: mediaId?.takeIf { it.isNotBlank() && !it.startsWith("file://") && !it.startsWith("content://") && !it.startsWith("/") }?.let {
+                    "https://i.ytimg.com/vi/$it/hqdefault.jpg"
+                },
             isPlaying = isPlaying,
             playWhenReady = playWhenReady,
             buffering = buffering,
