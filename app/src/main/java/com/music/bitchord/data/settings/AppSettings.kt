@@ -1290,7 +1290,15 @@ object AppSettings {
         val manager = context.getSystemService(ConnectivityManager::class.java) ?: return
         val refresh = {
             meteredConnection.value = runCatching {
-                if (manager.activeNetwork == null) null else manager.isActiveNetworkMetered
+                val active = manager.activeNetwork ?: return@runCatching null
+                val caps = manager.getNetworkCapabilities(active) ?: return@runCatching null
+                val isCellular = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                val isWifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                val isUnmetered = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+                if (isCellular) true
+                else if (isWifi && hasInternet && isUnmetered) false
+                else manager.isActiveNetworkMetered
             }.getOrNull()
         }
         refresh()

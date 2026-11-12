@@ -39,6 +39,8 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -237,18 +239,23 @@ fun DownloadManagerPage(
                     )
                     val failedItems = remember(items) { items.filter { it.progress is DownloadProgress.Failed } }
                     if (failedItems.isNotEmpty()) {
-                        TextButton(
+                        FilledTonalButton(
                             onClick = {
                                 failedItems.forEach { Downloads.enqueue(context, it.song, it.from) }
                             },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier.padding(end = 4.dp),
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Refresh,
                                 contentDescription = null,
-                                modifier = Modifier.size(18.dp),
+                                modifier = Modifier.size(16.dp),
                             )
                             Spacer(Modifier.width(4.dp))
-                            Text(stringResource(R.string.retry_failed))
+                            Text(
+                                text = stringResource(R.string.retry_failed),
+                                style = MaterialTheme.typography.labelMedium,
+                            )
                         }
                     }
                     if (session.busy) {

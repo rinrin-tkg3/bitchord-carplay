@@ -12,6 +12,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.music.bitchord.R
 import com.music.bitchord.data.model.Song
+import com.music.bitchord.data.settings.AppSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -124,6 +125,12 @@ class DownloadService : Service() {
                 if (idleFor >= IDLE_GRACE_MS && !Downloads.busy()) return
                 delay(IDLE_POLL_MS)
                 idleFor += IDLE_POLL_MS
+                continue
+            }
+            if (!AppSettings.downloadsAllowedNow && !Downloads.servableFromCache(song.videoId)) {
+                val from = if (AutoDownloadManager.isQueuedForAutoDownload(song.videoId)) "AutoDownload" else null
+                Downloads.enqueue(this@DownloadService, song, from = from)
+                delay(1500L)
                 continue
             }
             idleFor = 0L

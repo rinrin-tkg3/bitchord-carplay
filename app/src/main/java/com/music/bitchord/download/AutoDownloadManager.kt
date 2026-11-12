@@ -106,14 +106,16 @@ object AutoDownloadManager {
                 AppSettings.meteredConnection,
                 AppSettings.autoDownloadOnlyWhenCharging,
                 AppSettings.autoDownloadWifiOnly,
-            ) { on, metered, charging, wifiOnly ->
-                AutoDownloadCondition(on, metered, charging, wifiOnly)
+                com.music.bitchord.carplay.CarPlayWebBridge.serverRunning,
+            ) { on, metered, charging, wifiOnly, carPlayRunning ->
+                AutoDownloadCondition(on, metered, charging, wifiOnly, carPlayRunning)
             }
                 .distinctUntilChanged()
                 .collect { cond ->
                     if (cond.on) {
                         schedule(app)
-                        if ((!cond.wifiOnly || cond.metered == false) &&
+                        if (!cond.carPlayRunning &&
+                            (!cond.wifiOnly || cond.metered == false) &&
                             (!cond.onlyCharging || isDeviceCharging(app))
                         ) {
                             syncNow(app)
@@ -127,6 +129,7 @@ object AutoDownloadManager {
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 if (AppSettings.autoDownloadFavorites.value &&
+                    !com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value &&
                     (!AppSettings.autoDownloadWifiOnly.value || AppSettings.meteredConnection.value == false) &&
                     (!AppSettings.autoDownloadOnlyWhenCharging.value || isDeviceCharging(app)) &&
                     isCatchUpDue(app)
@@ -142,6 +145,7 @@ object AutoDownloadManager {
         val metered: Boolean?,
         val onlyCharging: Boolean,
         val wifiOnly: Boolean,
+        val carPlayRunning: Boolean,
     )
 
     fun isAutoDownloaded(videoId: String?): Boolean {
@@ -152,7 +156,42 @@ object AutoDownloadManager {
             markAutoDownloaded(videoId)
             return true
         }
+        val uri = Downloads.saved.value[videoId]
+        if (uri != null) {
+            val isAliasAuto = Downloads.savedMetadata.value.values.any {
+                it.uri == uri && (it.isAutoDownloaded || _autoDownloadedIds.value.contains(it.videoId))
+            }
+            if (isAliasAuto && Downloads.verifiedSavedUri(videoId) != null) {
+                markAutoDownloaded(videoId)
+                return true
+            }
+        }
         return false
+    }
+
+    fun allAutoDownloadedIds(): Set<String> {
+        val result = _autoDownloadedIds.value.toMutableSet()
+        val metaMap = Downloads.savedMetadata.value
+        val savedMap = Downloads.saved.value
+
+        for ((vid, meta) in metaMap) {
+            if (meta.isAutoDownloaded && Downloads.verifiedSavedUri(vid) != null) {
+                result.add(vid)
+            }
+        }
+
+        val autoUris = HashSet<String>()
+        for (vid in result) {
+            savedMap[vid]?.let { autoUris.add(it) }
+        }
+        if (autoUris.isNotEmpty()) {
+            for ((vid, uri) in savedMap) {
+                if (uri in autoUris && Downloads.verifiedSavedUri(vid) != null) {
+                    result.add(vid)
+                }
+            }
+        }
+        return result
     }
 
     fun markAutoDownloaded(videoId: String) {
@@ -185,7 +224,10 @@ object AutoDownloadManager {
         }
     }
 
-    fun isQueuedForAutoDownload(videoId: String): Boolean = queuedAutoDownloadIds.contains(videoId)
+    fun isQueuedForAutoDownload(videoId: String): Boolean =
+        queuedAutoDownloadIds.contains(videoId) ||
+        _autoDownloadedIds.value.contains(videoId) ||
+        Downloads.savedMetadata.value[videoId]?.isAutoDownloaded == true
 
     fun effectiveDownloadQualityFor(videoId: String): DownloadQuality {
         if (queuedAutoDownloadIds.contains(videoId)) {
@@ -203,11 +245,14 @@ object AutoDownloadManager {
         var addedAny = false
         var removedQueued = false
         val toPersist = _autoDownloadedIds.value.toMutableSet()
+        val isAnyQueued = ids.any { queuedAutoDownloadIds.contains(it) }
+        val isAnyMeta = ids.any { Downloads.savedMetadata.value[it]?.isAutoDownloaded == true }
+        val shouldMarkAuto = isAnyQueued || isAnyMeta
+
         for (id in ids) {
             val wasQueued = queuedAutoDownloadIds.remove(id)
             if (wasQueued) removedQueued = true
-            val isMetaAuto = Downloads.savedMetadata.value[id]?.isAutoDownloaded == true
-            if (wasQueued || isMetaAuto) {
+            if (shouldMarkAuto) {
                 toPersist.add(id)
                 addedAny = true
             }
@@ -337,6 +382,10 @@ object AutoDownloadManager {
 
     suspend fun performSync(context: Context): Boolean = syncMutex.withLock {
         if (!AppSettings.autoDownloadFavorites.value) return@withLock false
+        if (com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value) {
+            Log.i(TAG, "CarPlay/iPhone link active; skipping auto-download to preserve mobile hotspot data")
+            return@withLock false
+        }
         if (AppSettings.autoDownloadWifiOnly.value && AppSettings.meteredConnection.value != false) return@withLock false
         if (AppSettings.autoDownloadOnlyWhenCharging.value && !isDeviceCharging(context)) return@withLock false
         if (!AppSettings.downloadsAllowedNow) return@withLock false
@@ -469,9 +518,11 @@ object AutoDownloadManager {
         // Automatically prune old auto-downloaded songs that are no longer in active target rotation.
         // Safety guard: only prune if targetList is non-empty to avoid wiping out offline files on transient error.
         val currentAutoSet = _autoDownloadedIds.value.toSet()
-        val obsoleteIds = currentAutoSet - targetIdSet
+        val excessCount = if (maxSongs > 0) (currentAutoSet.size - maxSongs).coerceAtLeast(0) else 0
+        val obsoleteCandidates = (currentAutoSet - targetIdSet).toList()
+        val obsoleteIds = if (excessCount > 0) obsoleteCandidates.take(excessCount).toSet() else emptySet()
         if (targetList.isNotEmpty() && obsoleteIds.isNotEmpty()) {
-            Log.i(TAG, "Pruning ${obsoleteIds.size} obsolete auto-downloads no longer in target rotation")
+            Log.i(TAG, "Pruning ${obsoleteIds.size} excess obsolete auto-downloads to fit within maxSongs ($maxSongs)")
             for (oldId in obsoleteIds) {
                 runCatching { Downloads.delete(context, oldId) }
             }
@@ -564,6 +615,7 @@ class AutoDownloadWorker(
 
     override suspend fun doWork(): Result {
         if (!AppSettings.autoDownloadFavorites.value) return Result.success()
+        if (com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value) return Result.success()
         if (AppSettings.autoDownloadWifiOnly.value && AppSettings.meteredConnection.value != false) return Result.success()
         if (AppSettings.autoDownloadOnlyWhenCharging.value && !AutoDownloadManager.isDeviceCharging(applicationContext)) {
             return Result.retry()

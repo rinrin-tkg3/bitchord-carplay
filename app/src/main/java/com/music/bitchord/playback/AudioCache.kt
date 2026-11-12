@@ -1450,7 +1450,9 @@ object AudioCache {
                 // Safe to fill for the same reason in both cases: either nothing
                 // outranks YouTube and read-ahead is the only writer, or a
                 // source has been pinned and every writer now resolves to it.
-                val cacheBytes = (!substitutable || warmed != null) && !pinnedToYouTube
+                val alreadySaved = com.music.bitchord.download.Downloads.verifiedSavedUri(next) != null
+                val isMetered = AppSettings.meteredConnection.value == true
+                val cacheBytes = !alreadySaved && !isMetered && (!substitutable || warmed != null) && !pinnedToYouTube
                 if (cacheBytes) {
                     launch(TrackLog.about(next)) {
                         delay(PREFETCH_DELAY_MS)
@@ -1458,17 +1460,19 @@ object AudioCache {
                         fetchWhole(next)
                     }
                 }
-                launch {
-                    delay(PREFETCH_DELAY_MS)
-                    for (id in videoIds.take(QUEUE_LOOKAHEAD + 1).let { if (cacheBytes) it.drop(1) else it }) {
-                        // A track already pinned to another source has no use
-                        // for a YouTube URL: nothing will ask for one, and
-                        // minting it spends a client walk to fill a cache entry
-                        // that is never read.
-                        if (id == next && warmed != null) continue
-                        runCatching { StreamResolver.resolve(id) }
-                            .onFailure { TrackLog.d(TAG, "queue warm-up skipped $id: ${it.message}", about = id) }
-                        delay(QUEUE_RESOLVE_STAGGER_MS)
+                if (!isMetered) {
+                    launch {
+                        delay(PREFETCH_DELAY_MS)
+                        for (id in videoIds.take(QUEUE_LOOKAHEAD + 1).let { if (cacheBytes) it.drop(1) else it }) {
+                            // A track already pinned to another source has no use
+                            // for a YouTube URL: nothing will ask for one, and
+                            // minting it spends a client walk to fill a cache entry
+                            // that is never read.
+                            if (id == next && warmed != null) continue
+                            runCatching { StreamResolver.resolve(id) }
+                                .onFailure { TrackLog.d(TAG, "queue warm-up skipped $id: ${it.message}", about = id) }
+                            delay(QUEUE_RESOLVE_STAGGER_MS)
+                        }
                     }
                 }
             }

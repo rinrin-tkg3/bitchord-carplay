@@ -26,7 +26,11 @@ object AndroidAppUiHost : AppUiHost {
     @Composable
     override fun autoDownloadedIds(): Set<String> {
         val autoIds by com.music.bitchord.download.AutoDownloadManager.autoDownloadedIds.collectAsStateWithLifecycle()
-        return autoIds
+        val saved by com.music.bitchord.download.Downloads.saved.collectAsStateWithLifecycle()
+        val savedMeta by com.music.bitchord.download.Downloads.savedMetadata.collectAsStateWithLifecycle()
+        return androidx.compose.runtime.remember(autoIds, saved, savedMeta) {
+            com.music.bitchord.download.AutoDownloadManager.allAutoDownloadedIds()
+        }
     }
 
     override suspend fun releaseMotion(album: String, artist: String): CanvasArtwork? {

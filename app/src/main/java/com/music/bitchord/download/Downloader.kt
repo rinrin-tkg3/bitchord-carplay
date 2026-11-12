@@ -396,14 +396,27 @@ object Downloader {
             ?.takeIf { it > 0 }
             ?.let { return it }
 
-        return runCatching {
-            open(url, 0, 1).use { response ->
-                response.header("Content-Range")
-                    ?.substringAfter('/', "")
-                    ?.toLongOrNull()
-                    ?.takeIf { it > 0 }
+        var attempts = 0
+        while (attempts < 3) {
+            attempts++
+            val len = runCatching {
+                open(url, 0, 1).use { response ->
+                    response.header("Content-Range")
+                        ?.substringAfter('/', "")
+                        ?.toLongOrNull()
+                        ?.takeIf { it > 0 }
+                }
+            }.onFailure { Log.w(TAG, "could not measure the track (attempt $attempts/3): ${it.message}") }.getOrNull()
+            if (len != null) return len
+            if (attempts < 3) {
+                try {
+                    Thread.sleep(300L * attempts)
+                } catch (_: InterruptedException) {
+                    break
+                }
             }
-        }.onFailure { Log.w(TAG, "could not measure the track: ${it.message}") }.getOrNull()
+        }
+        return null
     }
 
     private val REFUSAL_CODES = setOf(403, 404, 410)

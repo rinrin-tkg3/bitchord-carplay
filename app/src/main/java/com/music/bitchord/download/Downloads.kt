@@ -9,6 +9,9 @@ import com.music.bitchord.data.DebugLog as Log
 import androidx.core.content.ContextCompat
 import com.music.bitchord.data.innertube.StreamResolver
 import com.music.bitchord.data.model.Song
+import com.music.bitchord.data.YtMusicRepository
+import com.music.bitchord.data.model.SearchFilter
+import com.music.bitchord.data.model.SearchResult
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.settings.DownloadQuality
 import com.music.bitchord.data.sources.SourceRegistry
@@ -957,6 +960,11 @@ object Downloads {
      */
     internal suspend fun run(context: Context, song: Song) = withContext(Dispatchers.IO) {
         val id = song.videoId
+        if (!AppSettings.downloadsAllowedNow && !servableFromCache(id)) {
+            Log.i(TAG, "Download of $id skipped: connection does not allow downloads now (Wi-Fi only / metered)")
+            fail(id, WIFI_ONLY_REFUSAL)
+            return@withContext
+        }
         // Set before the lookup, not after it. Resolving where a lossless track
         // comes from is the long part of a download, and leaving the row on
         // "Queued" for all of it reads as a queue that has stopped rather than
@@ -1283,7 +1291,12 @@ object Downloads {
         val isAutoDownload = AutoDownloadManager.isQueuedForAutoDownload(track.videoId)
         val requireM4a = isExport || isAutoDownload
         val strictM4a = false
-        val stream = StreamResolver.resolveForDownload(track.videoId, quality.maxKbps, requireM4a = requireM4a, strictM4a = strictM4a)
+        val stream = try {
+            StreamResolver.resolveForDownload(track.videoId, quality.maxKbps, requireM4a = requireM4a, strictM4a = strictM4a)
+        } catch (e: Exception) {
+            Log.w(TAG, "Direct resolveForDownload failed for ${track.videoId} ('${track.title}'); trying alternative / search fallback...", e)
+            resolveAlternativeDownloadStream(track, quality, requireM4a, strictM4a) ?: throw e
+        }
         val isM4a = stream.downloadExtension == "m4a"
         return Route(
             extension = stream.downloadExtension,
@@ -1294,6 +1307,79 @@ object Downloads {
                 Downloader.fetch(track.videoId, stream, quality.maxKbps, requireM4a = isM4a, sink, onProgress)
             },
         )
+    }
+
+private suspend fun resolveAlternativeDownloadStream(
+        track: Song,
+        quality: DownloadQuality,
+        requireM4a: Boolean,
+        strictM4a: Boolean,
+    ): StreamResolver.Stream? {
+        // 1. Try YouTube Music version switch (official video / audio pair)
+        val paired = runCatching {
+            YtMusicRepository.cachedVideoVersion(track.videoId)
+                ?: YtMusicRepository.cachedAudioVersion(track.videoId)
+                ?: YtMusicRepository.resolveVideo(track)
+                ?: YtMusicRepository.resolveAudio(track)
+        }.getOrNull()
+
+        if (paired != null && paired.videoId.isNotBlank() && paired.videoId != track.videoId) {
+            val s = runCatching {
+                StreamResolver.resolveForDownload(paired.videoId, quality.maxKbps, requireM4a = requireM4a, strictM4a = strictM4a)
+            }.getOrNull()
+            if (s != null) {
+                Log.i(TAG, "Resolved alternative download stream for '${track.title}' via paired version ${paired.videoId}")
+                return s
+            }
+        }
+
+        // 2. Search fallback using TrackMatcher target and queries
+        val target = TrackMatcher.targetOf(track)
+        for (query in TrackMatcher.queries(target)) {
+            val candidates = runCatching {
+                YtMusicRepository.search(query, SearchFilter.SONGS).getOrNull()
+                    ?.filterIsInstance<SearchResult.Track>()
+                    ?.map { it.song }
+                    .orEmpty()
+            }.getOrDefault(emptyList())
+
+            val best = TrackMatcher.best(candidates, target)
+                ?: TrackMatcher.bestOfficialAudioForVideo(candidates, target)
+                ?: candidates.firstOrNull { it.videoId != track.videoId && it.title.isNotBlank() }
+
+            if (best != null && best.videoId.isNotBlank() && best.videoId != track.videoId) {
+                val s = runCatching {
+                    StreamResolver.resolveForDownload(best.videoId, quality.maxKbps, requireM4a = requireM4a, strictM4a = strictM4a)
+                }.getOrNull()
+                if (s != null) {
+                    Log.i(TAG, "Resolved alternative download stream for '${track.title}' via query '$query' -> ${best.videoId}")
+                    return s
+                }
+            }
+        }
+
+        // 3. Search fallback for official music video
+        val videoCandidates = runCatching {
+            YtMusicRepository.search("${track.title} ${track.artist}", SearchFilter.VIDEOS).getOrNull()
+                ?.filterIsInstance<SearchResult.Track>()
+                ?.map { it.song }
+                .orEmpty()
+        }.getOrDefault(emptyList())
+
+        val bestVideo = TrackMatcher.best(videoCandidates, target)
+            ?: videoCandidates.firstOrNull { it.videoId != track.videoId && it.title.isNotBlank() }
+
+        if (bestVideo != null && bestVideo.videoId.isNotBlank() && bestVideo.videoId != track.videoId) {
+            val s = runCatching {
+                StreamResolver.resolveForDownload(bestVideo.videoId, quality.maxKbps, requireM4a = requireM4a, strictM4a = strictM4a)
+            }.getOrNull()
+            if (s != null) {
+                Log.i(TAG, "Resolved alternative download stream for '${track.title}' via video search -> ${bestVideo.videoId}")
+                return s
+            }
+        }
+
+        return null
     }
 
     /**
