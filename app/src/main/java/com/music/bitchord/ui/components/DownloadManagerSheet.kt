@@ -242,8 +242,8 @@ fun DownloadManagerPage(
                         FilledTonalButton(
                             onClick = {
                                 failedItems.forEach {
-                                    val fromSource = it.from ?: "AutoDownload"
-                                    if (fromSource == "AutoDownload") {
+                                    val fromSource = if (it.from == "AutoDownload") "Retry" else (it.from ?: "Retry")
+                                    if (it.from == "AutoDownload") {
                                         com.music.bitchord.download.AutoDownloadManager.markQueued(it.song.videoId)
                                     }
                                     Downloads.enqueue(context, it.song, fromSource)
@@ -317,8 +317,8 @@ fun DownloadManagerPage(
                 item = item,
                 onCancel = { Downloads.cancel(item.videoId) },
                 onRetry = {
-                    val fromSource = item.from ?: "AutoDownload"
-                    if (fromSource == "AutoDownload") {
+                    val fromSource = if (item.from == "AutoDownload") "Retry" else (item.from ?: "Retry")
+                    if (item.from == "AutoDownload") {
                         com.music.bitchord.download.AutoDownloadManager.markQueued(item.song.videoId)
                     }
                     Downloads.enqueue(context, item.song, fromSource)

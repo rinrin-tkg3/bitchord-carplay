@@ -124,8 +124,8 @@ object AutoDownloadManager {
                 .distinctUntilChanged()
                 .collect { cond ->
                     if (cond.on) {
-                        val isHotspot = isHotspotActive(app)
-                        if (cond.carPlayRunning || isHotspot) {
+                        val hotspotOnCellular = AppSettings.isHotspotOnCellular(app)
+                        if (hotspotOnCellular) {
                             cancelPendingAutoDownloads()
                         } else if ((!cond.wifiOnly || cond.metered == false) &&
                             (!cond.onlyCharging || isDeviceCharging(app))
@@ -426,8 +426,8 @@ object AutoDownloadManager {
 
     suspend fun performSync(context: Context): Boolean = syncMutex.withLock {
         if (!AppSettings.autoDownloadFavorites.value) return@withLock false
-        if (com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value || isHotspotActive(context)) {
-            Log.i(TAG, "CarPlay/iPhone link or hotspot active; skipping auto-download to preserve mobile hotspot data")
+        if (AppSettings.isHotspotOnCellular(context)) {
+            Log.i(TAG, "Hotspot on cellular active; skipping auto-download to preserve mobile hotspot data")
             cancelPendingAutoDownloads()
             return@withLock false
         }
@@ -625,8 +625,8 @@ object AutoDownloadManager {
         Log.i(TAG, "Starting auto-download for ${needed.size} songs on Wi-Fi (target: ${target.name}, total candidates: ${candidates.size})")
         val approxSongBytes = 8L * 1024 * 1024 // ~8 MB estimate
         for (song in needed) {
-            if (com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value || isHotspotActive(context)) {
-                Log.i(TAG, "Hotspot or CarPlay active; cancelling and pausing auto-download")
+            if (AppSettings.isHotspotOnCellular(context)) {
+                Log.i(TAG, "Hotspot on cellular active; cancelling and pausing auto-download")
                 cancelPendingAutoDownloads()
                 break
             }
@@ -667,7 +667,7 @@ class AutoDownloadWorker(
 
     override suspend fun doWork(): Result {
         if (!AppSettings.autoDownloadFavorites.value) return Result.success()
-        if (com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value || AutoDownloadManager.isHotspotActive(applicationContext)) {
+        if (AppSettings.isHotspotOnCellular(applicationContext)) {
             AutoDownloadManager.cancelPendingAutoDownloads()
             return Result.success()
         }

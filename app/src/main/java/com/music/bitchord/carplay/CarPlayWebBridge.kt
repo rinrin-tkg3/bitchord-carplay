@@ -795,6 +795,11 @@ object CarPlayWebBridge {
             if (mp4HeaderDur != null && mp4HeaderDur > 0L) {
                 return mp4HeaderDur
             }
+            val meta = com.music.bitchord.download.Downloads.savedMetadata.value[mediaId]
+            if (meta != null) {
+                val d = meta.durationText.durationMillis()
+                if (d > 0L) return d
+            }
         }
         if (curEntryDurationMs > 0L) {
             return curEntryDurationMs
@@ -1241,17 +1246,18 @@ internal class CarPlayWebSpeaker(
     override fun pause() {
         if (!active) return
         wantsPlay = false
+        val now = SystemClock.elapsedRealtime()
         val pos = positionMs
         basePositionMs = pos
         baseElapsedRealtime = 0L
         lastEmittedPositionMs = pos
         status = status?.let {
-            ClientStatus(it.mediaId, false, false, it.positionMs, it.durationMs, it.volume, SystemClock.elapsedRealtime())
+            ClientStatus(it.mediaId, false, false, it.positionMs, it.durationMs, it.volume, now)
         }
         if (status != null) {
             requestedPositionMs = pos
-            requestedAt = 0L
         }
+        requestedAt = now
         commandSeq++
         sink?.onRemotePlaybackChanged()
         onChanged()
@@ -1444,13 +1450,18 @@ internal class CarPlayWebSpeaker(
             // When client (iPhone) reports a settled play state change (not buffering and not right after host requested action)
             if (!buffering && !wasLoading && (now - requestedAt >= 1500L)) {
                 if (playing != wantsPlay) {
-                    wantsPlay = playing
-                    if (!playing) {
-                        baseElapsedRealtime = 0L
-                        basePositionMs = effectivePos
+                    if (!wantsPlay && playing) {
+                        // Host explicitly paused! Reject client's in-flight playing=true reports
+                        // so Android's pause button never bounces back to playing!
                     } else {
-                        baseElapsedRealtime = now
-                        basePositionMs = effectivePos
+                        wantsPlay = playing
+                        if (!playing) {
+                            baseElapsedRealtime = 0L
+                            basePositionMs = effectivePos
+                        } else {
+                            baseElapsedRealtime = now
+                            basePositionMs = effectivePos
+                        }
                     }
                 }
             }

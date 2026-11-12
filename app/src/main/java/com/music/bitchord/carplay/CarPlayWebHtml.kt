@@ -1724,6 +1724,12 @@ function formatMs(ms) {
  */
 function getEffectiveDurationMs() {
   if (state.durationMs && state.durationMs > 0) {
+    if (audio.duration && isFinite(audio.duration) && audio.duration > 0) {
+      const audioMs = Math.floor(audio.duration * 1000);
+      if (Math.abs(audioMs - 2 * state.durationMs) < 3000) {
+        return state.durationMs;
+      }
+    }
     return state.durationMs;
   }
   if (audio.duration && isFinite(audio.duration) && audio.duration > 0) {

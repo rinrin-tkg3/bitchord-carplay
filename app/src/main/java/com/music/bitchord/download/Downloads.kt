@@ -186,14 +186,13 @@ object Downloads {
      */
     fun enqueue(context: Context, song: Song, from: String? = null) {
         val id = song.videoId
-        val isAuto = from == "AutoDownload" || AutoDownloadManager.isQueuedForAutoDownload(id)
+        val isAuto = from == "AutoDownload" || (from != "Retry" && AutoDownloadManager.isQueuedForAutoDownload(id))
         if (isAuto) {
             AutoDownloadManager.markQueued(id)
-            if (AppSettings.isHotspotActive(context) ||
-                com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value ||
-                AppSettings.meteredConnection.value != false
+            if (AppSettings.isHotspotOnCellular(context) ||
+                AppSettings.meteredConnection.value == true
             ) {
-                Log.i(TAG, "Refusing auto-download enqueue of $id: hotspot/CarPlay/metered active")
+                Log.i(TAG, "Refusing auto-download enqueue of $id: hotspot on cellular or metered active")
                 return
             }
         }
@@ -424,6 +423,65 @@ object Downloads {
         if (!isMissingLocalFile(recorded)) return recorded
         Log.d(TAG, "$videoId was downloaded but the file is gone; forgetting it")
         forget(videoId)
+        return null
+    }
+
+    /**
+     * Resolves the best available local download URI for [videoId], checking:
+     * 1. Direct verified saved URI
+     * 2. Saved metadata URI
+     * 3. Any alias/paired videoId matching in saved or savedMetadata
+     * 4. Title / Artist matching against saved metadata if [title] is supplied
+     * Verifies the target file is intact and readable before returning.
+     */
+    fun findLocalDownloadUri(videoId: String, title: String? = null, artist: String? = null): String? {
+        if (videoId.isBlank()) return null
+
+        // 1. Direct saved URI
+        verifiedSavedUri(videoId)?.let { return it }
+
+        // 2. Direct savedMetadata URI
+        val meta = _savedMetadata.value[videoId]
+        if (meta != null && meta.uri.isNotBlank() && !isMissingLocalFile(meta.uri)) {
+            return meta.uri
+        }
+
+        // 3. Reverse lookup by URI in saved or savedMetadata
+        if (meta != null && meta.uri.isNotBlank()) {
+            val matchingKey = _saved.value.entries.firstOrNull { it.value == meta.uri }?.key
+            if (matchingKey != null) {
+                verifiedSavedUri(matchingKey)?.let { return it }
+            }
+        }
+
+        // 4. Check if videoId has a known paired version
+        val pairedSong = runCatching {
+            YtMusicRepository.cachedVideoVersion(videoId)
+                ?: YtMusicRepository.cachedAudioVersion(videoId)
+        }.getOrNull()
+        if (pairedSong != null && pairedSong.videoId.isNotBlank() && pairedSong.videoId != videoId) {
+            val pId = pairedSong.videoId
+            verifiedSavedUri(pId)?.let { return it }
+            val pMeta = _savedMetadata.value[pId]
+            if (pMeta != null && pMeta.uri.isNotBlank() && !isMissingLocalFile(pMeta.uri)) {
+                return pMeta.uri
+            }
+        }
+
+        // 5. Match by title / artist in savedMetadata
+        if (!title.isNullOrBlank()) {
+            val normalizedTitle = title.trim().lowercase(java.util.Locale.ROOT)
+            val matchedByTitle = _savedMetadata.value.values.firstOrNull { saved ->
+                val sTitle = saved.title.trim().lowercase(java.util.Locale.ROOT)
+                val titleMatch = sTitle == normalizedTitle || sTitle.contains(normalizedTitle) || normalizedTitle.contains(sTitle)
+                val artistMatch = artist.isNullOrBlank() || saved.artist.contains(artist, ignoreCase = true) || artist.contains(saved.artist, ignoreCase = true)
+                titleMatch && artistMatch && !isMissingLocalFile(saved.uri)
+            }
+            if (matchedByTitle != null) {
+                return matchedByTitle.uri
+            }
+        }
+
         return null
     }
 
@@ -1076,6 +1134,12 @@ object Downloads {
             DownloadStore.existing(context, DownloadStore.fileNameFor(track, extension))
         }?.let { uri ->
             return@withContext Prepared(song.videoId, track, route = null, alreadyAt = uri)
+        }
+
+        // Adopt already downloaded track or alias to bypass network completely
+        findLocalDownloadUri(song.videoId, track.title, track.artist)?.let { uriStr ->
+            Log.i(TAG, "prepare: ${song.videoId} ('${track.title}') already exists locally at $uriStr; adopting without network")
+            return@withContext Prepared(song.videoId, track, route = null, alreadyAt = android.net.Uri.parse(uriStr))
         }
 
         // Asked for from the Cached songs folder: the copy already on disk is

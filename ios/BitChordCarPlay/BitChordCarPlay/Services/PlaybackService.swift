@@ -371,6 +371,13 @@ public class PlaybackService: NSObject, ObservableObject {
             if newState.durationMs > 0 {
                 self.durationSec = Double(newState.durationMs) / 1000.0
             }
+        } else if isRoutedToIphone && !self.isSeekingLocally {
+            if newState.durationMs > 0 {
+                let hostDurSec = Double(newState.durationMs) / 1000.0
+                if self.durationSec <= 0 || abs(self.durationSec - 2.0 * hostDurSec) < 3.0 {
+                    self.durationSec = hostDurSec
+                }
+            }
         }
 
         updateNowPlayingInfo()
@@ -518,7 +525,15 @@ public class PlaybackService: NSObject, ObservableObject {
                 if let dur = self.player?.currentItem?.duration {
                     let dSec = CMTimeGetSeconds(dur)
                     if !dSec.isNaN && !dSec.isInfinite && dSec > 0 {
-                        self.durationSec = dSec
+                        let hostDurSec = Double(self.state?.durationMs ?? 0) / 1000.0
+                        if hostDurSec > 0 && abs(dSec - 2.0 * hostDurSec) < 3.0 {
+                            // CoreMedia doubled the fragmented MP4 duration! Discard doubled value.
+                            self.durationSec = hostDurSec
+                        } else if hostDurSec > 0 {
+                            self.durationSec = hostDurSec
+                        } else {
+                            self.durationSec = dSec
+                        }
                     }
                 }
                 // Preload next track when within 25 seconds of song end

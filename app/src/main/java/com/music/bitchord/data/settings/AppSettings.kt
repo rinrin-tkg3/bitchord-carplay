@@ -303,6 +303,24 @@ object AppSettings {
         return false
     }
 
+    /**
+     * Returns true ONLY if device is acting as a Hotspot AND the upstream internet
+     * connection is metered cellular (where downloading or large background sync would drain
+     * the mobile data allowance).
+     *
+     * When the phone is connected to Home Wi-Fi (e.g. Wi-Fi Sharing), upstream is free Wi-Fi,
+     * so downloads are completely safe and do not consume cellular data!
+     */
+    fun isHotspotOnCellular(context: Context): Boolean {
+        if (!isHotspotActive(context)) return false
+        val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return true
+        val activeNet = cm.activeNetwork ?: return true
+        val caps = cm.getNetworkCapabilities(activeNet) ?: return true
+        val hasWifiInternet = caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) &&
+            caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        return !hasWifiInternet
+    }
+
     // `losslessAudio` used to live here, behind a "Prefer lossless" switch on
     // the Sources screen. It is gone: sources are asked for their best and each
     // degrades on its own terms, so the switch's only real effect was to ask a

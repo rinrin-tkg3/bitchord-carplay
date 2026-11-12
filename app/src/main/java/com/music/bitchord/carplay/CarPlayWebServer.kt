@@ -1437,15 +1437,35 @@ object CarPlayWebServer {
                     LocalAudioTranscoder.getOrTranscode(context, videoId, uri)
                 }
                 if (transcoded != null && transcoded.exists() && transcoded.length() > 0L) {
-                    return streamLocalFile(method, transcoded, "audio/mp4", rangeHeader, out)
+                    return streamLocalFile(method, transcoded, "audio/mp4", rangeHeader, out, videoId = videoId)
                 }
                 return false
             }
 
+            // For MP4 DASH streams from YouTube, inspect and patch the moov box to eliminate 2x duration bug on iOS AVPlayer
+            var patchedPrefix: ByteArray? = null
+            if (mimeType == "audio/mp4") {
+                val initHeaderBytes = ByteArray(16 * 1024)
+                val headerLen = runCatching {
+                    if (file != null) {
+                        java.io.FileInputStream(file).use { it.read(initHeaderBytes) }
+                    } else {
+                        context.contentResolver.openInputStream(uri)?.use { it.read(initHeaderBytes) } ?: -1
+                    }
+                }.getOrDefault(-1)
+                if (headerLen >= 64) {
+                    val (durMs, prefix) = patchMp4InitBoxesInPlace(initHeaderBytes.copyOf(headerLen))
+                    if (durMs > 0L) {
+                        resolvedDurationsMs[videoId] = durMs
+                    }
+                    patchedPrefix = prefix
+                }
+            }
+
             return if (file != null) {
-                streamLocalFile(method, file, mimeType, rangeHeader, out)
+                streamLocalFile(method, file, mimeType, rangeHeader, out, videoId = videoId, patchedPrefix = patchedPrefix)
             } else {
-                streamLocalContent(method, uri, totalLength, mimeType, rangeHeader, out)
+                streamLocalContent(method, uri, totalLength, mimeType, rangeHeader, out, videoId = videoId, patchedPrefix = patchedPrefix)
             }
         } catch (e: Exception) {
             val msg = e.message.orEmpty()
@@ -1464,6 +1484,8 @@ object CarPlayWebServer {
         mimeType: String,
         rangeHeader: String?,
         out: OutputStream,
+        videoId: String = "",
+        patchedPrefix: ByteArray? = null,
     ): Boolean {
         val totalLength = file.length()
         if (totalLength <= 0L) return false
@@ -1509,7 +1531,9 @@ object CarPlayWebServer {
         sb.append("Content-Type: ").append(mimeType).append("\r\n")
         sb.append("Accept-Ranges: bytes\r\n")
         sb.append("Access-Control-Allow-Origin: *\r\n")
-        sb.append("Cache-Control: no-cache\r\n")
+        sb.append("Cache-Control: public, max-age=604800, immutable\r\n")
+        val etag = if (videoId.isNotBlank()) "\"${videoId}_${totalLength}\"" else "\"${file.lastModified()}_${totalLength}\""
+        sb.append("ETag: ").append(etag).append("\r\n")
         sb.append("Content-Length: ").append(contentLength).append("\r\n")
         if (isRange) {
             sb.append("Content-Range: bytes ").append(start).append("-").append(end).append("/").append(totalLength).append("\r\n")
@@ -1526,12 +1550,30 @@ object CarPlayWebServer {
                     }
                     val buf = ByteArray(64 * 1024)
                     var bytesRemaining = contentLength
+                    var fileOffset = start
+                    var totalSentThisReq = 0L
+                    val burstLimit = 768L * 1024L
                     while (bytesRemaining > 0L) {
                         val toRead = minOf(buf.size.toLong(), bytesRemaining).toInt()
                         val read = fis.read(buf, 0, toRead)
                         if (read <= 0) break
+
+                        // Apply patched prefix for DASH MP4 box zeroing (fixes 2x duration bug on iOS AVPlayer)
+                        if (patchedPrefix != null && fileOffset < patchedPrefix.size) {
+                            val startInPrefix = fileOffset.toInt()
+                            val countToPatch = minOf(read, patchedPrefix.size - startInPrefix)
+                            System.arraycopy(patchedPrefix, startInPrefix, buf, 0, countToPatch)
+                        }
+
                         out.write(buf, 0, read)
                         bytesRemaining -= read
+                        fileOffset += read
+                        totalSentThisReq += read
+
+                        // Pace audio transfer after initial buffer so tethering link isn't flooded with a 10MB burst
+                        if (totalSentThisReq > burstLimit && bytesRemaining > 0L) {
+                            Thread.sleep(80L)
+                        }
                     }
                     out.flush()
                 }
@@ -1551,6 +1593,8 @@ object CarPlayWebServer {
         mimeType: String,
         rangeHeader: String?,
         out: OutputStream,
+        videoId: String = "",
+        patchedPrefix: ByteArray? = null,
     ): Boolean {
         if (totalLength <= 0L) return false
 
@@ -1595,7 +1639,9 @@ object CarPlayWebServer {
         sb.append("Content-Type: ").append(mimeType).append("\r\n")
         sb.append("Accept-Ranges: bytes\r\n")
         sb.append("Access-Control-Allow-Origin: *\r\n")
-        sb.append("Cache-Control: no-cache\r\n")
+        sb.append("Cache-Control: public, max-age=604800, immutable\r\n")
+        val etag = if (videoId.isNotBlank()) "\"${videoId}_${totalLength}\"" else "\"${totalLength}\""
+        sb.append("ETag: ").append(etag).append("\r\n")
         sb.append("Content-Length: ").append(contentLength).append("\r\n")
         if (isRange) {
             sb.append("Content-Range: bytes ").append(start).append("-").append(end).append("/").append(totalLength).append("\r\n")
@@ -1615,12 +1661,30 @@ object CarPlayWebServer {
                         }
                         val buf = ByteArray(64 * 1024)
                         var bytesRemaining = contentLength
+                        var fileOffset = start
+                        var totalSentThisReq = 0L
+                        val burstLimit = 768L * 1024L
                         while (bytesRemaining > 0L) {
                             val toRead = minOf(buf.size.toLong(), bytesRemaining).toInt()
                             val read = fis.read(buf, 0, toRead)
                             if (read <= 0) break
+
+                            // Apply patched prefix for DASH MP4 box zeroing (fixes 2x duration bug on iOS AVPlayer)
+                            if (patchedPrefix != null && fileOffset < patchedPrefix.size) {
+                                val startInPrefix = fileOffset.toInt()
+                                val countToPatch = minOf(read, patchedPrefix.size - startInPrefix)
+                                System.arraycopy(patchedPrefix, startInPrefix, buf, 0, countToPatch)
+                            }
+
                             out.write(buf, 0, read)
                             bytesRemaining -= read
+                            fileOffset += read
+                            totalSentThisReq += read
+
+                            // Pace audio transfer after initial buffer so tethering link isn't flooded with a 10MB burst
+                            if (totalSentThisReq > burstLimit && bytesRemaining > 0L) {
+                                Thread.sleep(80L)
+                            }
                         }
                         out.flush()
                     }
@@ -1644,16 +1708,10 @@ object CarPlayWebServer {
         }
 
         // Check if track is downloaded locally: zero cellular data usage!
-        val savedUriStr = Downloads.verifiedSavedUri(videoId)
+        val savedUriStr = Downloads.findLocalDownloadUri(videoId)
+            ?: Downloads.verifiedSavedUri(videoId)
             ?: Downloads.saved.value[videoId]
-            ?: run {
-                val matchedMeta = Downloads.savedMetadata.value[videoId]
-                if (matchedMeta != null && matchedMeta.uri.isNotBlank()) {
-                    Downloads.saved.value.entries.firstOrNull { it.value == matchedMeta.uri }?.key?.let {
-                        Downloads.verifiedSavedUri(it)
-                    }
-                } else null
-            }
+            ?: Downloads.savedMetadata.value[videoId]?.uri?.takeIf { !Downloads.isMissingLocalFile(it) }
 
         if (!savedUriStr.isNullOrBlank()) {
             handleLocalAudioStream(method, videoId, savedUriStr, rangeHeader, out)
