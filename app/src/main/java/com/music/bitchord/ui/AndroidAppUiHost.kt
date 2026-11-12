@@ -33,6 +33,10 @@ object AndroidAppUiHost : AppUiHost {
         }
     }
 
+    override fun isAutoDownloaded(videoId: String?): Boolean {
+        return com.music.bitchord.download.AutoDownloadManager.isAutoDownloaded(videoId)
+    }
+
     override suspend fun releaseMotion(album: String, artist: String): CanvasArtwork? {
         if (!AppSettings.animatedCanvas.value || album.isBlank() || artist.isBlank()) return null
         return CanvasRepository.canvasForAlbum(album, artist)

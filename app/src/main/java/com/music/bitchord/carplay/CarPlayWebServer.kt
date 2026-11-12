@@ -324,7 +324,7 @@ object CarPlayWebServer {
         return try {
             val reqBuilder = Request.Builder().url(url).get()
             headers.forEach { (k, v) -> reqBuilder.header(k, v) }
-            reqBuilder.header("Range", "bytes=0-8191")
+            reqBuilder.header("Range", "bytes=0-65535")
             Http.client.newCall(reqBuilder.build()).execute().use { resp ->
                 if (!resp.isSuccessful && resp.code != 206) return 0L to null
                 val raw = resp.body?.bytes() ?: return 0L to null
@@ -347,13 +347,15 @@ object CarPlayWebServer {
             if (boxSize < 8) break
             val type = String(buf, pos + 4, 4, StandardCharsets.US_ASCII)
             val boxEnd = pos + boxSize
-            if (type == "moov" && boxEnd <= buf.size) {
-                val durFromMoov = parseAndPatchMoovChildren(buf, pos + 8, boxEnd)
+            if (type == "moov") {
+                val moovLimit = minOf(boxEnd, buf.size)
+                val durFromMoov = parseAndPatchMoovChildren(buf, pos + 8, moovLimit)
                 if (durFromMoov > 0L) durationMs = durFromMoov
-                moovEnd = boxEnd
+                moovEnd = moovLimit
+                if (boxEnd > buf.size) break
             } else if (type == "sidx" && boxEnd <= buf.size) {
                 val durFromSidx = parseSidxDurationMs(buf, pos + 8, boxEnd)
-                if (durationMs <= 0L && durFromSidx > 0L) {
+                if (durFromSidx > 0L) {
                     durationMs = durFromSidx
                 }
                 break
@@ -1445,7 +1447,8 @@ object CarPlayWebServer {
             // For MP4 DASH streams from YouTube, inspect and patch the moov box to eliminate 2x duration bug on iOS AVPlayer
             var patchedPrefix: ByteArray? = null
             if (mimeType == "audio/mp4") {
-                val initHeaderBytes = ByteArray(16 * 1024)
+                val bufSize = minOf(totalLength, 2L * 1024L * 1024L).toInt()
+                val initHeaderBytes = ByteArray(bufSize)
                 val headerLen = runCatching {
                     if (file != null) {
                         java.io.FileInputStream(file).use { it.read(initHeaderBytes) }

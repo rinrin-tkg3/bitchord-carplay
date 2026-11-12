@@ -31,6 +31,8 @@ interface AppUiHost {
     @Composable
     fun autoDownloadedIds(): Set<String> = emptySet()
 
+    fun isAutoDownloaded(videoId: String?): Boolean = false
+
     /**
      * A release's motion cover, for Home's Top Picks — the same lookup the
      * album page makes. Null is the normal answer, and the only one where the

@@ -574,7 +574,8 @@ private fun QuickAccessTile(
             modifier = Modifier.fillMaxSize(),
         )
         if (isCurrent && isPlaying) SearchPlayingBars(Modifier.align(Alignment.Center))
-        if (item.videoId != null && item.videoId in AppUi.host.autoDownloadedIds()) {
+        val isAuto = (item.videoId != null && item.videoId in AppUi.host.autoDownloadedIds()) || AppUi.host.isAutoDownloaded(item.videoId)
+        if (isAuto) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)

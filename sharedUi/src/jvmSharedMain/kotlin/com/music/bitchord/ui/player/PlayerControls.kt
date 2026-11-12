@@ -344,7 +344,7 @@ internal fun PlaybackQualityLabel(
         ?.takeIf { it.ordinal < chosenQuality.ordinal }
         ?: chosenQuality
     val racingLossless by NerdStats.racingLossless.collectAsStateWithLifecycle()
-    val isAutoDownloaded = song.videoId in AppUi.host.autoDownloadedIds()
+    val isAutoDownloaded = song.videoId in AppUi.host.autoDownloadedIds() || AppUi.host.isAutoDownloaded(song.videoId)
 
     Row(
         verticalAlignment = Alignment.CenterVertically,

@@ -797,7 +797,7 @@ fun SearchPlayingBars(modifier: Modifier = Modifier) {
 @Composable
 fun DownloadedBadge(videoId: String, tint: Color, modifier: Modifier = Modifier) {
     if (videoId !in AppUi.host.downloadedIds()) return
-    val isAuto = videoId in AppUi.host.autoDownloadedIds()
+    val isAuto = videoId in AppUi.host.autoDownloadedIds() || AppUi.host.isAutoDownloaded(videoId)
     Spacer(Modifier.width(8.dp))
     if (isAuto) {
         Row(

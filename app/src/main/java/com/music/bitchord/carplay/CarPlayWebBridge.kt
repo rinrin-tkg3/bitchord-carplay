@@ -823,11 +823,28 @@ object CarPlayWebBridge {
                 return playerDur
             }
         }
+        val knownDur = when {
+            curEntryDurationMs > 0L -> curEntryDurationMs
+            currentSong != null && (mediaId == null || currentSong.videoId == mediaId) && currentSong.durationMillis() > 0L -> currentSong.durationMillis()
+            else -> 0L
+        }
+        if (knownDur > 0L && clientDurationMs > 0L && kotlin.math.abs(clientDurationMs - 2 * knownDur) < 5000L) {
+            return knownDur
+        }
         return clientDurationMs.coerceAtLeast(0L)
     }
 
     @Volatile
     private var cachedPlaybackSnapshot: PlaybackSnapshot = PlaybackSnapshot()
+
+    fun invalidateCachedSnapshot(isPlaying: Boolean, playWhenReady: Boolean, posMs: Long = 0L, commandSeq: Long = 0L) {
+        cachedPlaybackSnapshot = cachedPlaybackSnapshot.copy(
+            isPlaying = isPlaying,
+            playWhenReady = playWhenReady,
+            positionMs = if (posMs > 0L) posMs else cachedPlaybackSnapshot.positionMs,
+            commandSeq = if (commandSeq > 0L) commandSeq else cachedPlaybackSnapshot.commandSeq,
+        )
+    }
 
     fun updatePlaybackSnapshot() {
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -844,17 +861,19 @@ object CarPlayWebBridge {
      * Uses volatile caching so API threads are NEVER blocked and never time out with empty data!
      */
     fun getPlaybackSnapshot(callback: (PlaybackSnapshot) -> Unit) {
+        val sp = speaker
+        val forcePause = sp?.active == true && !sp.playWhenReady
         if (Looper.myLooper() == Looper.getMainLooper()) {
             cachedPlaybackSnapshot = buildPlaybackSnapshotOnMain()
-            callback(cachedPlaybackSnapshot)
+            callback(if (forcePause) cachedPlaybackSnapshot.copy(isPlaying = false, playWhenReady = false) else cachedPlaybackSnapshot)
         } else {
             val cached = cachedPlaybackSnapshot
-            // Asynchronously refresh the cached snapshot on the main thread for the next poll
+            val safeCached = if (forcePause) cached.copy(isPlaying = false, playWhenReady = false) else cached
             mainHandler.post {
                 cachedPlaybackSnapshot = buildPlaybackSnapshotOnMain()
             }
-            if (cached.mediaId != null || cached.queue.isNotEmpty()) {
-                callback(cached)
+            if (safeCached.mediaId != null || safeCached.queue.isNotEmpty()) {
+                callback(safeCached)
             } else {
                 val latch = java.util.concurrent.CountDownLatch(1)
                 var result: PlaybackSnapshot? = null
@@ -870,7 +889,8 @@ object CarPlayWebBridge {
                     latch.await(150, java.util.concurrent.TimeUnit.MILLISECONDS)
                 } catch (_: InterruptedException) {
                 }
-                callback(result ?: cachedPlaybackSnapshot)
+                val res = result ?: cachedPlaybackSnapshot
+                callback(if (forcePause) res.copy(isPlaying = false, playWhenReady = false) else res)
             }
         }
     }
@@ -1039,6 +1059,8 @@ internal class CarPlayWebSpeaker(
 
     var wantedSeekMs: Long = 0L
         private set
+
+    var hostPausedAt: Long = 0L
 
     private class ClientStatus(
         val mediaId: String,
@@ -1232,6 +1254,7 @@ internal class CarPlayWebSpeaker(
             if (wantsAutoActivate) start()
             return
         }
+        hostPausedAt = 0L
         wantsPlay = true
         finished = false
         requestedAt = SystemClock.elapsedRealtime()
@@ -1240,6 +1263,11 @@ internal class CarPlayWebSpeaker(
         commandSeq++
         sink?.onRemotePlaybackChanged()
         onChanged()
+        CarPlayWebBridge.invalidateCachedSnapshot(
+            isPlaying = true,
+            playWhenReady = true,
+            commandSeq = commandSeq,
+        )
         CarPlayWebBridge.updatePlaybackSnapshot()
     }
 
@@ -1247,6 +1275,7 @@ internal class CarPlayWebSpeaker(
         if (!active) return
         wantsPlay = false
         val now = SystemClock.elapsedRealtime()
+        hostPausedAt = now
         val pos = positionMs
         basePositionMs = pos
         baseElapsedRealtime = 0L
@@ -1261,6 +1290,12 @@ internal class CarPlayWebSpeaker(
         commandSeq++
         sink?.onRemotePlaybackChanged()
         onChanged()
+        CarPlayWebBridge.invalidateCachedSnapshot(
+            isPlaying = false,
+            playWhenReady = false,
+            posMs = pos,
+            commandSeq = commandSeq,
+        )
         CarPlayWebBridge.updatePlaybackSnapshot()
     }
 
@@ -1407,7 +1442,9 @@ internal class CarPlayWebSpeaker(
                     requestedPositionMs
                 }
             } else {
-                requestedAt = 0L
+                if (wantsPlay) {
+                    requestedAt = 0L
+                }
                 positionMs.coerceAtLeast(0L)
             }
             val effectivePos = if (authDurMs > 0L) {
@@ -1446,9 +1483,11 @@ internal class CarPlayWebSpeaker(
 
             val anchoredPos = if (authDurMs > 0L) currentMonotonic.coerceAtMost(authDurMs) else currentMonotonic
 
+            val isHostPauseLock = !wantsPlay && (now - hostPausedAt < 3500L)
+
             // Bidirectional play state synchronization:
             // When client (iPhone) reports a settled play state change (not buffering and not right after host requested action)
-            if (!buffering && !wasLoading && (now - requestedAt >= 1500L)) {
+            if (!buffering && !wasLoading && (now - requestedAt >= 1500L) && !isHostPauseLock) {
                 if (playing != wantsPlay) {
                     if (!wantsPlay && playing) {
                         // Host explicitly paused! Reject client's in-flight playing=true reports
@@ -1466,7 +1505,7 @@ internal class CarPlayWebSpeaker(
                 }
             }
 
-            val effectivePlaying = if (!wantsPlay) false else playing
+            val effectivePlaying = if (!wantsPlay || isHostPauseLock) false else playing
 
             status = ClientStatus(
                 mediaId = cleanMediaId,

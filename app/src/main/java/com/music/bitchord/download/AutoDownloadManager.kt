@@ -112,6 +112,23 @@ object AutoDownloadManager {
         }
 
         scope.launch {
+            Downloads.savedMetadata.collect { metaMap ->
+                val newAutoIds = mutableSetOf<String>()
+                metaMap.values.forEach { meta ->
+                    if (meta.isAutoDownloaded && Downloads.verifiedSavedUri(meta.videoId) != null) {
+                        newAutoIds.add(meta.videoId)
+                    }
+                }
+                if (newAutoIds.isNotEmpty()) {
+                    val current = _autoDownloadedIds.value
+                    if (!current.containsAll(newAutoIds)) {
+                        _autoDownloadedIds.value = current + newAutoIds
+                    }
+                }
+            }
+        }
+
+        scope.launch {
             combine(
                 AppSettings.autoDownloadFavorites,
                 AppSettings.meteredConnection,
@@ -291,7 +308,8 @@ object AutoDownloadManager {
         val toPersist = _autoDownloadedIds.value.toMutableSet()
         val isAnyQueued = ids.any { queuedAutoDownloadIds.contains(it) }
         val isAnyMeta = ids.any { Downloads.savedMetadata.value[it]?.isAutoDownloaded == true }
-        val shouldMarkAuto = isAnyQueued || isAnyMeta
+        val isAnyTarget = ids.any { lastTargetIds.contains(it) }
+        val shouldMarkAuto = isAnyQueued || isAnyMeta || isAnyTarget
 
         for (id in ids) {
             val wasQueued = queuedAutoDownloadIds.remove(id)

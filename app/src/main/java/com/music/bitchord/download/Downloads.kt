@@ -186,7 +186,7 @@ object Downloads {
      */
     fun enqueue(context: Context, song: Song, from: String? = null) {
         val id = song.videoId
-        val isAuto = from == "AutoDownload" || (from != "Retry" && AutoDownloadManager.isQueuedForAutoDownload(id))
+        val isAuto = from == "AutoDownload" || AutoDownloadManager.isQueuedForAutoDownload(id) || AutoDownloadManager.isTargetSong(id) || AutoDownloadManager.isAutoDownloaded(id)
         if (isAuto) {
             AutoDownloadManager.markQueued(id)
             if (AppSettings.isHotspotOnCellular(context) ||
@@ -777,7 +777,8 @@ object Downloads {
             ?: asked.albumName?.takeIf { it.isNotBlank() }
         val isAuto = ids.any { AutoDownloadManager.isQueuedForAutoDownload(it) } ||
             ids.any { id -> DownloadSession.state.value.items.any { it.videoId == id && it.from == "AutoDownload" } } ||
-            ids.any { AutoDownloadManager.isTargetSong(it) }
+            ids.any { AutoDownloadManager.isTargetSong(it) } ||
+            ids.any { AutoDownloadManager.isAutoDownloaded(it) }
         val metaAsked = SavedSongMetadata(
             videoId = asked.videoId,
             title = asked.title,
