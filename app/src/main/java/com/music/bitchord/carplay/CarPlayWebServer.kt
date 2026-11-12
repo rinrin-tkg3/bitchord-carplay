@@ -241,6 +241,7 @@ object CarPlayWebServer {
         if (videoId.isBlank() || videoId.startsWith("content:") || videoId.startsWith("file:")) return
         // If track is already downloaded locally, do not warm up / resolve remote stream over cellular!
         if (Downloads.verifiedSavedUri(videoId) != null) return
+        if (AppSettings.meteredConnection.value == true) return
         scope.launch {
             try {
                 resolveIosStream(videoId)
@@ -660,32 +661,20 @@ object CarPlayWebServer {
                 }
                 path.startsWith("/api/direct-stream/") -> {
                     val videoId = URLDecoder.decode(path.removePrefix("/api/direct-stream/"), "UTF-8").substringBefore('?')
-                    val savedUriStr = Downloads.verifiedSavedUri(videoId)
-                    if (!savedUriStr.isNullOrBlank()) {
-                        val hostIp = hostHeader.substringBefore(':').ifBlank { "192.168.49.1" }
-                        val activePort = serverSocket?.localPort ?: CarPlayWebBridge.port.value
-                        val localAudioUrl = "http://$hostIp:$activePort/api/audio/$videoId?cid=ios_carplay"
-                        val json = JSONObject().apply {
-                            put("videoId", videoId)
-                            put("url", localAudioUrl)
-                            put("durationMs", 0)
-                            put("mimeType", "audio/mp4")
-                        }.toString()
-                        writeResponse(out, "200 OK", "application/json; charset=utf-8", json.toByteArray(Charsets.UTF_8))
-                    } else {
-                        val stream = runBlocking { resolveIosStream(videoId) }
-                        if (stream != null) {
-                            val json = JSONObject().apply {
-                                put("videoId", videoId)
-                                put("url", stream.url)
-                                put("durationMs", stream.durationMs)
-                                put("mimeType", stream.mimeType)
-                            }.toString()
-                            writeResponse(out, "200 OK", "application/json; charset=utf-8", json.toByteArray(Charsets.UTF_8))
-                        } else {
-                            writeResponse(out, "502 Bad Gateway", "application/json; charset=utf-8", """{"error":"Failed to resolve stream"}""".toByteArray())
-                        }
-                    }
+                    val hostIp = sock.localAddress?.hostAddress?.takeUnless { it == "0.0.0.0" }
+                        ?: hostHeader.substringBefore(':').ifBlank { "10.130.242.79" }
+                    val activePort = serverSocket?.localPort ?: CarPlayWebBridge.port.value
+                    // Always route playback through local /api/audio/$videoId:
+                    // 1) Downloaded/cached files are served 100% locally from disk with 0 cellular data.
+                    // 2) Uncached streams are proxied with controlled bitrate, avoiding direct high-speed unmetered CDN drain.
+                    val localAudioUrl = "http://$hostIp:$activePort/api/audio/$videoId?cid=ios_carplay"
+                    val json = JSONObject().apply {
+                        put("videoId", videoId)
+                        put("url", localAudioUrl)
+                        put("durationMs", 0)
+                        put("mimeType", "audio/mp4")
+                    }.toString()
+                    writeResponse(out, "200 OK", "application/json; charset=utf-8", json.toByteArray(Charsets.UTF_8))
                 }
                 path.startsWith("/api/audio/") -> {
                     val videoId = URLDecoder.decode(path.removePrefix("/api/audio/"), "UTF-8").substringBefore('?')
@@ -1459,8 +1448,13 @@ object CarPlayWebServer {
                 streamLocalContent(method, uri, totalLength, mimeType, rangeHeader, out)
             }
         } catch (e: Exception) {
+            val msg = e.message.orEmpty()
+            if (msg.contains("Broken pipe", ignoreCase = true) || msg.contains("Connection reset", ignoreCase = true)) {
+                Log.d(TAG, "Client disconnected during local stream for $videoId: $msg")
+                return true
+            }
             Log.w(TAG, "Local audio streaming failed for $videoId: ${e.message}")
-            return false
+            return true
         }
     }
 
@@ -1520,25 +1514,31 @@ object CarPlayWebServer {
         if (isRange) {
             sb.append("Content-Range: bytes ").append(start).append("-").append(end).append("/").append(totalLength).append("\r\n")
         }
-        sb.append("Connection: close\r\n\r\n")
+        sb.append("Connection: keep-alive\r\n\r\n")
         out.write(sb.toString().toByteArray(Charsets.UTF_8))
         out.flush()
 
         if (method != "HEAD") {
-            java.io.FileInputStream(file).use { fis ->
-                if (start > 0L) {
-                    fis.channel.position(start)
+            try {
+                java.io.FileInputStream(file).use { fis ->
+                    if (start > 0L) {
+                        fis.channel.position(start)
+                    }
+                    val buf = ByteArray(64 * 1024)
+                    var bytesRemaining = contentLength
+                    while (bytesRemaining > 0L) {
+                        val toRead = minOf(buf.size.toLong(), bytesRemaining).toInt()
+                        val read = fis.read(buf, 0, toRead)
+                        if (read <= 0) break
+                        out.write(buf, 0, read)
+                        bytesRemaining -= read
+                    }
+                    out.flush()
                 }
-                val buf = ByteArray(64 * 1024)
-                var bytesRemaining = contentLength
-                while (bytesRemaining > 0L) {
-                    val toRead = minOf(buf.size.toLong(), bytesRemaining).toInt()
-                    val read = fis.read(buf, 0, toRead)
-                    if (read <= 0) break
-                    out.write(buf, 0, read)
-                    bytesRemaining -= read
-                }
-                out.flush()
+            } catch (e: java.io.IOException) {
+                // Client closed socket (Broken pipe / Connection reset) while reading bytes.
+                // AVPlayer does this normally when probing ranges or buffering.
+                Log.d(TAG, "Client closed connection while streaming local file: ${e.message}")
             }
         }
         return true
@@ -1600,29 +1600,33 @@ object CarPlayWebServer {
         if (isRange) {
             sb.append("Content-Range: bytes ").append(start).append("-").append(end).append("/").append(totalLength).append("\r\n")
         }
-        sb.append("Connection: close\r\n\r\n")
+        sb.append("Connection: keep-alive\r\n\r\n")
         out.write(sb.toString().toByteArray(Charsets.UTF_8))
         out.flush()
 
         if (method != "HEAD") {
-            val context = BitChordApplication.instance
-            val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return false
-            pfd.use { descriptor ->
-                java.io.FileInputStream(descriptor.fileDescriptor).use { fis ->
-                    if (start > 0L) {
-                        fis.channel.position(start)
+            try {
+                val context = BitChordApplication.instance
+                val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return false
+                pfd.use { descriptor ->
+                    java.io.FileInputStream(descriptor.fileDescriptor).use { fis ->
+                        if (start > 0L) {
+                            fis.channel.position(start)
+                        }
+                        val buf = ByteArray(64 * 1024)
+                        var bytesRemaining = contentLength
+                        while (bytesRemaining > 0L) {
+                            val toRead = minOf(buf.size.toLong(), bytesRemaining).toInt()
+                            val read = fis.read(buf, 0, toRead)
+                            if (read <= 0) break
+                            out.write(buf, 0, read)
+                            bytesRemaining -= read
+                        }
+                        out.flush()
                     }
-                    val buf = ByteArray(64 * 1024)
-                    var bytesRemaining = contentLength
-                    while (bytesRemaining > 0L) {
-                        val toRead = minOf(buf.size.toLong(), bytesRemaining).toInt()
-                        val read = fis.read(buf, 0, toRead)
-                        if (read <= 0) break
-                        out.write(buf, 0, read)
-                        bytesRemaining -= read
-                    }
-                    out.flush()
                 }
+            } catch (e: java.io.IOException) {
+                Log.d(TAG, "Client closed connection while streaming local content: ${e.message}")
             }
         }
         return true
@@ -1641,11 +1645,19 @@ object CarPlayWebServer {
 
         // Check if track is downloaded locally: zero cellular data usage!
         val savedUriStr = Downloads.verifiedSavedUri(videoId)
-        if (!savedUriStr.isNullOrBlank()) {
-            if (handleLocalAudioStream(method, videoId, savedUriStr, rangeHeader, out)) {
-                return
+            ?: Downloads.saved.value[videoId]
+            ?: run {
+                val matchedMeta = Downloads.savedMetadata.value[videoId]
+                if (matchedMeta != null && matchedMeta.uri.isNotBlank()) {
+                    Downloads.saved.value.entries.firstOrNull { it.value == matchedMeta.uri }?.key?.let {
+                        Downloads.verifiedSavedUri(it)
+                    }
+                } else null
             }
-            Log.w(TAG, "Local audio streaming failed for $videoId; falling back to remote stream")
+
+        if (!savedUriStr.isNullOrBlank()) {
+            handleLocalAudioStream(method, videoId, savedUriStr, rangeHeader, out)
+            return
         }
 
         // Check if track is cached in ExoPlayer AudioCache: zero cellular data usage!
@@ -1667,8 +1679,8 @@ object CarPlayWebServer {
                     tempFile.exists() && tempFile.length() > 0L
                 }.getOrDefault(false)
             }
-            if (isReady && handleLocalAudioStream(method, videoId, Uri.fromFile(tempFile).toString(), rangeHeader, out)) {
-                Log.i(TAG, "Served $videoId from AudioCache complete copy (zero cellular data)")
+            if (isReady) {
+                handleLocalAudioStream(method, videoId, Uri.fromFile(tempFile).toString(), rangeHeader, out)
                 return
             }
         }
@@ -1715,7 +1727,7 @@ object CarPlayWebServer {
                 if (!contentRange.isNullOrBlank()) {
                     sb.append("Content-Range: ").append(contentRange).append("\r\n")
                 }
-                sb.append("Connection: close\r\n\r\n")
+                sb.append("Connection: keep-alive\r\n\r\n")
                 out.write(sb.toString().toByteArray(Charsets.UTF_8))
                 out.flush()
 
@@ -1767,7 +1779,7 @@ object CarPlayWebServer {
             for ((k, v) in extraHeaders) {
                 sb.append(k).append(": ").append(v).append("\r\n")
             }
-            sb.append("Connection: close\r\n\r\n")
+            sb.append("Connection: keep-alive\r\n\r\n")
             out.write(sb.toString().toByteArray(Charsets.UTF_8))
             if (body.isNotEmpty()) {
                 out.write(body)
@@ -1899,7 +1911,7 @@ object CarPlayWebServer {
                 sb.append("Content-Type: ").append(contentType).append("\r\n")
                 val respBytes = resp.body?.bytes() ?: ByteArray(0)
                 sb.append("Content-Length: ").append(respBytes.size).append("\r\n")
-                sb.append("Connection: close\r\n\r\n")
+                sb.append("Connection: keep-alive\r\n\r\n")
                 out.write(sb.toString().toByteArray(Charsets.UTF_8))
                 if (method != "HEAD" && respBytes.isNotEmpty()) {
                     out.write(respBytes)

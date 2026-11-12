@@ -711,7 +711,7 @@ object StreamResolver {
                 "Download format ${if (requireM4a) "M4A" else "WebM"} unavailable for $videoId; " +
                     "falling back to alternate container ${if (requireM4a) "WebM" else "M4A"}",
             )
-            val (altTry, offeredAlt) = tryDownloadFormat(videoId, maxKbps, !requireM4a)
+            val (altTry, offeredAlt) = tryDownloadFormat(videoId, maxKbps, !requireM4a, allowAlternateFound = true)
             if (altTry != null) return@withContext altTry
             if (offeredAlt) offered = true
 
@@ -736,14 +736,15 @@ object StreamResolver {
         videoId: String,
         maxKbps: Int,
         requireM4a: Boolean,
+        allowAlternateFound: Boolean = false,
     ): Pair<Stream?, Boolean> {
         var offered = false
-        val found = innerTubeXStreamAllowingUploads(videoId, maxKbps, requireM4a)
-            ?.takeIf { if (requireM4a) it.downloadExtension == "m4a" else it.downloadExtension == "webm" }
-        if (found != null) {
+        val rawFound = innerTubeXStreamAllowingUploads(videoId, maxKbps, requireM4a)
+        val matchingFound = rawFound?.takeIf { if (requireM4a) it.downloadExtension == "m4a" else it.downloadExtension == "webm" }
+        if (matchingFound != null) {
             offered = true
-            if (found.kbps <= maxKbps) return found to true
-            TrackLog.d(TAG, "InnerTubeX's ${found.kbps}kbps is over the ${maxKbps}kbps download ceiling for $videoId")
+            if (matchingFound.kbps <= maxKbps) return matchingFound to true
+            TrackLog.d(TAG, "InnerTubeX's ${matchingFound.kbps}kbps is over the ${maxKbps}kbps download ceiling for $videoId")
         }
 
         val format = if (requireM4a) "MP4" else "Opus"
@@ -758,7 +759,8 @@ object StreamResolver {
         }.getOrNull()
 
         if (extracted != null) return extracted to true
-        if (found != null) return found to true
+        if (matchingFound != null) return matchingFound to true
+        if (allowAlternateFound && rawFound != null) return rawFound to true
         return null to offered
     }
 

@@ -241,7 +241,13 @@ fun DownloadManagerPage(
                     if (failedItems.isNotEmpty()) {
                         FilledTonalButton(
                             onClick = {
-                                failedItems.forEach { Downloads.enqueue(context, it.song, it.from) }
+                                failedItems.forEach {
+                                    val fromSource = it.from ?: "AutoDownload"
+                                    if (fromSource == "AutoDownload") {
+                                        com.music.bitchord.download.AutoDownloadManager.markQueued(it.song.videoId)
+                                    }
+                                    Downloads.enqueue(context, it.song, fromSource)
+                                }
                             },
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                             modifier = Modifier.padding(end = 4.dp),
@@ -310,7 +316,13 @@ fun DownloadManagerPage(
             DownloadManagerRow(
                 item = item,
                 onCancel = { Downloads.cancel(item.videoId) },
-                onRetry = { Downloads.enqueue(context, item.song, item.from) },
+                onRetry = {
+                    val fromSource = item.from ?: "AutoDownload"
+                    if (fromSource == "AutoDownload") {
+                        com.music.bitchord.download.AutoDownloadManager.markQueued(item.song.videoId)
+                    }
+                    Downloads.enqueue(context, item.song, fromSource)
+                },
             )
         }
     }

@@ -699,7 +699,8 @@ object Downloads {
         val album = fetched.albumName?.takeIf { it.isNotBlank() }
             ?: asked.albumName?.takeIf { it.isNotBlank() }
         val isAuto = ids.any { AutoDownloadManager.isQueuedForAutoDownload(it) } ||
-            ids.any { id -> DownloadSession.state.value.items.any { it.videoId == id && it.from == "AutoDownload" } }
+            ids.any { id -> DownloadSession.state.value.items.any { it.videoId == id && it.from == "AutoDownload" } } ||
+            ids.any { AutoDownloadManager.isTargetSong(it) }
         val metaAsked = SavedSongMetadata(
             videoId = asked.videoId,
             title = asked.title,
@@ -1325,7 +1326,7 @@ private suspend fun resolveAlternativeDownloadStream(
 
         if (paired != null && paired.videoId.isNotBlank() && paired.videoId != track.videoId) {
             val s = runCatching {
-                StreamResolver.resolveForDownload(paired.videoId, quality.maxKbps, requireM4a = requireM4a, strictM4a = strictM4a)
+                StreamResolver.resolveForDownload(paired.videoId, quality.maxKbps, requireM4a = false, strictM4a = false)
             }.getOrNull()
             if (s != null) {
                 Log.i(TAG, "Resolved alternative download stream for '${track.title}' via paired version ${paired.videoId}")
@@ -1349,7 +1350,7 @@ private suspend fun resolveAlternativeDownloadStream(
 
             if (best != null && best.videoId.isNotBlank() && best.videoId != track.videoId) {
                 val s = runCatching {
-                    StreamResolver.resolveForDownload(best.videoId, quality.maxKbps, requireM4a = requireM4a, strictM4a = strictM4a)
+                    StreamResolver.resolveForDownload(best.videoId, quality.maxKbps, requireM4a = false, strictM4a = false)
                 }.getOrNull()
                 if (s != null) {
                     Log.i(TAG, "Resolved alternative download stream for '${track.title}' via query '$query' -> ${best.videoId}")
@@ -1371,7 +1372,7 @@ private suspend fun resolveAlternativeDownloadStream(
 
         if (bestVideo != null && bestVideo.videoId.isNotBlank() && bestVideo.videoId != track.videoId) {
             val s = runCatching {
-                StreamResolver.resolveForDownload(bestVideo.videoId, quality.maxKbps, requireM4a = requireM4a, strictM4a = strictM4a)
+                StreamResolver.resolveForDownload(bestVideo.videoId, quality.maxKbps, requireM4a = false, strictM4a = false)
             }.getOrNull()
             if (s != null) {
                 Log.i(TAG, "Resolved alternative download stream for '${track.title}' via video search -> ${bestVideo.videoId}")

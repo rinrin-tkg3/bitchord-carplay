@@ -75,8 +75,11 @@ object AutoDownloadManager {
     val autoDownloadedIds: StateFlow<Set<String>> = _autoDownloadedIds.asStateFlow()
 
     private val queuedAutoDownloadIds = ConcurrentHashMap.newKeySet<String>()
+    private val lastTargetIds = ConcurrentHashMap.newKeySet<String>()
 
     private var appContext: Context? = null
+
+    private const val KEY_LAST_TARGET_IDS = "last_target_ids"
 
     fun init(app: Application) {
         appContext = app
@@ -85,7 +88,9 @@ object AutoDownloadManager {
         val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val savedSet = prefs.getStringSet(KEY_AUTO_DOWNLOADED_IDS, emptySet())?.toMutableSet() ?: mutableSetOf()
         val queuedSet = prefs.getStringSet(KEY_QUEUED_IDS, emptySet()) ?: emptySet()
+        val targetSet = prefs.getStringSet(KEY_LAST_TARGET_IDS, emptySet()) ?: emptySet()
         queuedAutoDownloadIds.addAll(queuedSet)
+        lastTargetIds.addAll(targetSet)
 
         // Incorporate any songs with isAutoDownloaded == true from persisted Downloads metadata
         Downloads.savedMetadata.value.values.forEach { meta ->
@@ -148,9 +153,16 @@ object AutoDownloadManager {
         val carPlayRunning: Boolean,
     )
 
+    fun isTargetSong(videoId: String): Boolean =
+        videoId.isNotBlank() && (lastTargetIds.contains(videoId) || queuedAutoDownloadIds.contains(videoId) || _autoDownloadedIds.value.contains(videoId))
+
     fun isAutoDownloaded(videoId: String?): Boolean {
         if (videoId.isNullOrBlank()) return false
         if (_autoDownloadedIds.value.contains(videoId) && Downloads.verifiedSavedUri(videoId) != null) return true
+        if (lastTargetIds.contains(videoId) && Downloads.verifiedSavedUri(videoId) != null) {
+            markAutoDownloaded(videoId)
+            return true
+        }
         val meta = Downloads.savedMetadata.value[videoId]
         if (meta?.isAutoDownloaded == true && Downloads.verifiedSavedUri(videoId) != null) {
             markAutoDownloaded(videoId)
@@ -159,7 +171,7 @@ object AutoDownloadManager {
         val uri = Downloads.saved.value[videoId]
         if (uri != null) {
             val isAliasAuto = Downloads.savedMetadata.value.values.any {
-                it.uri == uri && (it.isAutoDownloaded || _autoDownloadedIds.value.contains(it.videoId))
+                it.uri == uri && (it.isAutoDownloaded || _autoDownloadedIds.value.contains(it.videoId) || lastTargetIds.contains(it.videoId))
             }
             if (isAliasAuto && Downloads.verifiedSavedUri(videoId) != null) {
                 markAutoDownloaded(videoId)
@@ -176,6 +188,12 @@ object AutoDownloadManager {
 
         for ((vid, meta) in metaMap) {
             if (meta.isAutoDownloaded && Downloads.verifiedSavedUri(vid) != null) {
+                result.add(vid)
+            }
+        }
+
+        for (vid in lastTargetIds) {
+            if (Downloads.verifiedSavedUri(vid) != null) {
                 result.add(vid)
             }
         }
@@ -226,6 +244,7 @@ object AutoDownloadManager {
 
     fun isQueuedForAutoDownload(videoId: String): Boolean =
         queuedAutoDownloadIds.contains(videoId) ||
+        lastTargetIds.contains(videoId) ||
         _autoDownloadedIds.value.contains(videoId) ||
         Downloads.savedMetadata.value[videoId]?.isAutoDownloaded == true
 
@@ -513,6 +532,14 @@ object AutoDownloadManager {
 
         val targetList = if (maxSongs > 0) candidates.values.take(maxSongs) else candidates.values.toList()
         val targetIdSet = targetList.map { it.videoId }.toSet()
+        if (targetIdSet.isNotEmpty()) {
+            lastTargetIds.clear()
+            lastTargetIds.addAll(targetIdSet)
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putStringSet(KEY_LAST_TARGET_IDS, targetIdSet)
+                .apply()
+        }
 
         // --- SMART ROTATION & PRUNING ---
         // Automatically prune old auto-downloaded songs that are no longer in active target rotation.
@@ -551,17 +578,11 @@ object AutoDownloadManager {
             }
         }
 
-        // Self-heal: If any candidates are already saved on disk and were downloaded as auto downloads
-        // or during previous auto-download runs, make sure they are tracked in _autoDownloadedIds
+        // Self-heal: Ensure any candidates already saved on disk are tracked in _autoDownloadedIds
         for (song in targetList) {
             val id = song.videoId
-            if (Downloads.verifiedSavedUri(id) != null && !_autoDownloadedIds.value.contains(id)) {
-                val isMetaAuto = Downloads.savedMetadata.value[id]?.isAutoDownloaded == true
-                val wasQueued = queuedAutoDownloadIds.contains(id)
-                val wasSessionAuto = DownloadSession.state.value.items.any { it.videoId == id && it.from == "AutoDownload" }
-                if (isMetaAuto || wasQueued || wasSessionAuto) {
-                    markAutoDownloaded(id)
-                }
+            if (Downloads.verifiedSavedUri(id) != null) {
+                markAutoDownloaded(id)
             }
         }
 
