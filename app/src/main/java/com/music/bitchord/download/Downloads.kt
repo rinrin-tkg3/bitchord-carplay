@@ -186,8 +186,16 @@ object Downloads {
      */
     fun enqueue(context: Context, song: Song, from: String? = null) {
         val id = song.videoId
-        if (from == "AutoDownload") {
+        val isAuto = from == "AutoDownload" || AutoDownloadManager.isQueuedForAutoDownload(id)
+        if (isAuto) {
             AutoDownloadManager.markQueued(id)
+            if (AppSettings.isHotspotActive(context) ||
+                com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value ||
+                AppSettings.meteredConnection.value != false
+            ) {
+                Log.i(TAG, "Refusing auto-download enqueue of $id: hotspot/CarPlay/metered active")
+                return
+            }
         }
         // A copy straight out of the song cache spends no data, so the Wi-Fi
         // rule has nothing to say about it.
@@ -314,6 +322,17 @@ object Downloads {
                         slots.withPermit {
                             val id = song.videoId
                             if (synchronized(lock) { id !in running }) {
+                                handled += id
+                                return@withPermit
+                            }
+                            val isAuto = AutoDownloadManager.isQueuedForAutoDownload(id) ||
+                                DownloadSession.state.value.items.any { it.videoId == id && it.from == "AutoDownload" }
+                            if (isAuto && (AppSettings.isHotspotActive(context) ||
+                                    com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value ||
+                                    AppSettings.meteredConnection.value != false)
+                            ) {
+                                Log.i(TAG, "Cancelling queued auto-download $id: hotspot/CarPlay/metered active")
+                                cancel(id)
                                 handled += id
                                 return@withPermit
                             }
@@ -732,6 +751,23 @@ object Downloads {
             },
         )
         AutoDownloadManager.onDownloadCompleted(ids)
+    }
+
+    fun markAutoDownloadedMetadata(videoIds: Collection<String>) {
+        if (videoIds.isEmpty()) return
+        val idSet = videoIds.toSet()
+        record(
+            saved = { it },
+            meta = { map ->
+                map.mapValues { (id, meta) ->
+                    if (id in idSet && !meta.isAutoDownloaded) {
+                        meta.copy(isAutoDownloaded = true)
+                    } else {
+                        meta
+                    }
+                }
+            }
+        )
     }
 
     /**

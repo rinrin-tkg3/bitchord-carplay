@@ -274,7 +274,34 @@ object AppSettings {
     val autoDownloadWifiOnly = MutableStateFlow(true)
 
     /** Whether the active network charges for data. `null` while offline. */
-    val meteredConnection = MutableStateFlow<Boolean?>(null)
+    val meteredConnection = MutableStateFlow<Boolean?>(true)
+    private var appContext: Context? = null
+
+    /** Detects whether device is acting as a Wi-Fi Hotspot / Tethering host. */
+    fun isHotspotActive(context: Context): Boolean {
+        val fromWm = runCatching {
+            val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+            val method = wm?.javaClass?.getDeclaredMethod("isWifiApEnabled")
+            method?.isAccessible = true
+            method?.invoke(wm) as? Boolean ?: false
+        }.getOrDefault(false)
+        if (fromWm) return true
+
+        val fromIfaces = runCatching {
+            java.net.NetworkInterface.getNetworkInterfaces()?.toList().orEmpty().any { iface ->
+                iface.isUp && (
+                    iface.name.startsWith("swlan") ||
+                    iface.name.startsWith("ap") ||
+                    iface.name.startsWith("softap") ||
+                    iface.name.startsWith("rndis") ||
+                    iface.name.startsWith("wigig")
+                )
+            }
+        }.getOrDefault(false)
+        if (fromIfaces) return true
+
+        return false
+    }
 
     // `losslessAudio` used to live here, behind a "Prefer lossless" switch on
     // the Sources screen. It is gone: sources are asked for their best and each
@@ -955,7 +982,7 @@ object AppSettings {
      * would blame a Wi-Fi setting for an outage.
      */
     val downloadsAllowedNow: Boolean
-        get() = !wifiOnlyDownloads.value || meteredConnection.value != true
+        get() = (!wifiOnlyDownloads.value || meteredConnection.value == false) && (appContext?.let { !isHotspotActive(it) } ?: true)
 
     /**
      * [authStore] is the application's own, passed in rather than opened again:
@@ -963,6 +990,7 @@ object AppSettings {
      * one here was a measurable slice of cold start.
      */
     fun init(context: Context, authStore: AuthStore) {
+        appContext = context.applicationContext
         prefs = context.getSharedPreferences("bitchord_settings", Context.MODE_PRIVATE)
         this.authStore = authStore
         com.music.bitchord.data.spotify.LocalPlaylistStore.init(context)
@@ -1290,16 +1318,25 @@ object AppSettings {
         val manager = context.getSystemService(ConnectivityManager::class.java) ?: return
         val refresh = {
             meteredConnection.value = runCatching {
-                val active = manager.activeNetwork ?: return@runCatching null
-                val caps = manager.getNetworkCapabilities(active) ?: return@runCatching null
+                val active = manager.activeNetwork ?: return@runCatching true
+                val caps = manager.getNetworkCapabilities(active) ?: return@runCatching true
                 val isCellular = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
                 val isWifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
                 val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 val isUnmetered = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
-                if (isCellular) true
-                else if (isWifi && hasInternet && isUnmetered) false
-                else manager.isActiveNetworkMetered
-            }.getOrNull()
+                val linkProps = manager.getLinkProperties(active)
+                val iface = linkProps?.interfaceName.orEmpty()
+                val isHotspotInterface = iface.startsWith("swlan") || iface.startsWith("ap") || iface.startsWith("wigig")
+                val isHotspot = isHotspotActive(context)
+
+                if (isCellular || isHotspot || isHotspotInterface) {
+                    true
+                } else if (isWifi && hasInternet && isUnmetered && iface.startsWith("wlan")) {
+                    false
+                } else {
+                    manager.isActiveNetworkMetered
+                }
+            }.getOrDefault(true)
         }
         refresh()
         runCatching {

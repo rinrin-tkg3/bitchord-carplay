@@ -699,7 +699,12 @@ object StreamResolver {
         init
 
         // Attempt 1: Try with primary requested format (M4A or WebM)
-        val (firstTry, offeredFirst) = tryDownloadFormat(videoId, maxKbps, requireM4a)
+        val (firstTry, offeredFirst) = try {
+            tryDownloadFormat(videoId, maxKbps, requireM4a)
+        } catch (e: Exception) {
+            TrackLog.w(TAG, "tryDownloadFormat primary failed for $videoId: ${e.message}")
+            null to false
+        }
         if (firstTry != null) return@withContext firstTry
 
         var offered = offeredFirst
@@ -711,7 +716,12 @@ object StreamResolver {
                 "Download format ${if (requireM4a) "M4A" else "WebM"} unavailable for $videoId; " +
                     "falling back to alternate container ${if (requireM4a) "WebM" else "M4A"}",
             )
-            val (altTry, offeredAlt) = tryDownloadFormat(videoId, maxKbps, !requireM4a, allowAlternateFound = true)
+            val (altTry, offeredAlt) = try {
+                tryDownloadFormat(videoId, maxKbps, !requireM4a, allowAlternateFound = true)
+            } catch (e: Exception) {
+                TrackLog.w(TAG, "tryDownloadFormat alternate failed for $videoId: ${e.message}")
+                null to false
+            }
             if (altTry != null) return@withContext altTry
             if (offeredAlt) offered = true
 

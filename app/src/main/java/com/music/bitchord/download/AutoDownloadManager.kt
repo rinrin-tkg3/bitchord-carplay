@@ -93,10 +93,16 @@ object AutoDownloadManager {
         lastTargetIds.addAll(targetSet)
 
         // Incorporate any songs with isAutoDownloaded == true from persisted Downloads metadata
+        val idsToPromote = mutableSetOf<String>()
         Downloads.savedMetadata.value.values.forEach { meta ->
-            if (meta.isAutoDownloaded && Downloads.verifiedSavedUri(meta.videoId) != null) {
+            val isAuto = meta.isAutoDownloaded || lastTargetIds.contains(meta.videoId) || savedSet.contains(meta.videoId)
+            if (isAuto && Downloads.verifiedSavedUri(meta.videoId) != null) {
                 savedSet.add(meta.videoId)
+                if (!meta.isAutoDownloaded) idsToPromote.add(meta.videoId)
             }
+        }
+        if (idsToPromote.isNotEmpty()) {
+            Downloads.markAutoDownloadedMetadata(idsToPromote)
         }
 
         val validSet = savedSet.filter { id -> Downloads.verifiedSavedUri(id) != null }.toSet()
@@ -118,11 +124,13 @@ object AutoDownloadManager {
                 .distinctUntilChanged()
                 .collect { cond ->
                     if (cond.on) {
-                        schedule(app)
-                        if (!cond.carPlayRunning &&
-                            (!cond.wifiOnly || cond.metered == false) &&
+                        val isHotspot = isHotspotActive(app)
+                        if (cond.carPlayRunning || isHotspot) {
+                            cancelPendingAutoDownloads()
+                        } else if ((!cond.wifiOnly || cond.metered == false) &&
                             (!cond.onlyCharging || isDeviceCharging(app))
                         ) {
+                            schedule(app)
                             syncNow(app)
                         }
                     } else {
@@ -152,6 +160,23 @@ object AutoDownloadManager {
         val wifiOnly: Boolean,
         val carPlayRunning: Boolean,
     )
+
+    fun isHotspotActive(context: Context): Boolean {
+        return AppSettings.isHotspotActive(context)
+    }
+
+    fun cancelPendingAutoDownloads() {
+        val autoDownloadIds = DownloadSession.state.value.items
+            .filter { it.from == "AutoDownload" || queuedAutoDownloadIds.contains(it.videoId) }
+            .map { it.videoId }
+            .toSet()
+        if (autoDownloadIds.isNotEmpty()) {
+            Log.i(TAG, "Cancelling ${autoDownloadIds.size} pending/running auto-downloads due to hotspot/CarPlay activity")
+            for (id in autoDownloadIds) {
+                Downloads.cancel(id)
+            }
+        }
+    }
 
     fun isTargetSong(videoId: String): Boolean =
         videoId.isNotBlank() && (lastTargetIds.contains(videoId) || queuedAutoDownloadIds.contains(videoId) || _autoDownloadedIds.value.contains(videoId))
@@ -401,8 +426,9 @@ object AutoDownloadManager {
 
     suspend fun performSync(context: Context): Boolean = syncMutex.withLock {
         if (!AppSettings.autoDownloadFavorites.value) return@withLock false
-        if (com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value) {
-            Log.i(TAG, "CarPlay/iPhone link active; skipping auto-download to preserve mobile hotspot data")
+        if (com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value || isHotspotActive(context)) {
+            Log.i(TAG, "CarPlay/iPhone link or hotspot active; skipping auto-download to preserve mobile hotspot data")
+            cancelPendingAutoDownloads()
             return@withLock false
         }
         if (AppSettings.autoDownloadWifiOnly.value && AppSettings.meteredConnection.value != false) return@withLock false
@@ -599,6 +625,11 @@ object AutoDownloadManager {
         Log.i(TAG, "Starting auto-download for ${needed.size} songs on Wi-Fi (target: ${target.name}, total candidates: ${candidates.size})")
         val approxSongBytes = 8L * 1024 * 1024 // ~8 MB estimate
         for (song in needed) {
+            if (com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value || isHotspotActive(context)) {
+                Log.i(TAG, "Hotspot or CarPlay active; cancelling and pausing auto-download")
+                cancelPendingAutoDownloads()
+                break
+            }
             if (AppSettings.autoDownloadWifiOnly.value && AppSettings.meteredConnection.value != false) {
                 Log.i(TAG, "Network condition changed; pausing auto-download")
                 break
@@ -636,7 +667,10 @@ class AutoDownloadWorker(
 
     override suspend fun doWork(): Result {
         if (!AppSettings.autoDownloadFavorites.value) return Result.success()
-        if (com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value) return Result.success()
+        if (com.music.bitchord.carplay.CarPlayWebBridge.serverRunning.value || AutoDownloadManager.isHotspotActive(applicationContext)) {
+            AutoDownloadManager.cancelPendingAutoDownloads()
+            return Result.success()
+        }
         if (AppSettings.autoDownloadWifiOnly.value && AppSettings.meteredConnection.value != false) return Result.success()
         if (AppSettings.autoDownloadOnlyWhenCharging.value && !AutoDownloadManager.isDeviceCharging(applicationContext)) {
             return Result.retry()
