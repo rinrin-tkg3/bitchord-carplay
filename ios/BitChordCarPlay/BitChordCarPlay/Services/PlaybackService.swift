@@ -546,14 +546,14 @@ public class PlaybackService: NSObject, ObservableObject {
         setupPlayerWithItem(playerItem, startPositionSec: startPositionSec)
     }
 
-    @objc private func playerItemDidReachEnd() {
-        if state?.activeOnIphone == true {
-            reportPlaybackToHost(ended: true)
-        }
-        nextTrack()
-    }
-
-    // MARK: - Auto-Discovery of Galaxy BitChord Host (mDNS & Multi-Subnet Probing)
+    @objc private func playerItemDidReachEnd() {
+        guard state?.activeOnIphone == true else { return }
+        reportPlaybackToHost(ended: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.fetchState()
+        }
+    }
+
     public func triggerAutoDiscovery() {
         guard !isDiscovering else { return }
         isDiscovering = true

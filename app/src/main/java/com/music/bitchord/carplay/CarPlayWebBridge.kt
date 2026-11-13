@@ -1106,7 +1106,11 @@ internal class CarPlayWebSpeaker(
     private var finished: Boolean = false
     private var requestedPositionMs: Long = 0L
     private var requestedAt: Long = 0L
-    private var autoEndedForMediaId: String? = null
+    private var autoEndedForMediaId: String? = null
+
+    var lastAutoEndedAt: Long = 0L
+        private set
+
     private var lastSinkNotifyAt: Long = 0L
 
     // Monotonic smooth playback clock state (guarantees jitter-free, monotonic 1.0x progress for LyricClock)
@@ -1385,7 +1389,8 @@ internal class CarPlayWebSpeaker(
             return
         }
         wantedMediaId = newId
-        autoEndedForMediaId = null
+        // Retain autoEndedForMediaId to prevent late packets for the old track from re-triggering end
+
         wantsPlay = true
         loading = true
         mainHandler.removeCallbacks(loadingTimeoutRunnable)
@@ -1554,17 +1559,28 @@ internal class CarPlayWebSpeaker(
                 volume = 100,
                 at = now,
             )
-            val reachedAuthoritativeEnd = !isPendingSeek &&
-                effectivePlaying &&
-                authDurMs > 5_000L &&
-                rawEffectivePos >= authDurMs - 550L
-            if (ended || reachedAuthoritativeEnd) {
-                if (autoEndedForMediaId != cleanMediaId) {
-                    autoEndedForMediaId = cleanMediaId
-                    onClientTrackEnded()
-                }
-            }
-
+            val currentItem = localPlayer()?.currentMediaItem
+            val currentMediaId = currentItem?.mediaId?.substringBefore("?")?.trim()
+            val isCurrentTrack = !currentMediaId.isNullOrBlank() && (
+                cleanMediaId == currentMediaId ||
+                cleanMediaId.contains(currentMediaId) ||
+                currentMediaId.contains(cleanMediaId)
+            )
+
+            val reachedAuthoritativeEnd = isCurrentTrack &&
+                !isPendingSeek &&
+                effectivePlaying &&
+                authDurMs > 5_000L &&
+                rawEffectivePos >= authDurMs - 200L
+
+            if (isCurrentTrack && (ended || reachedAuthoritativeEnd)) {
+                if (autoEndedForMediaId != cleanMediaId) {
+                    autoEndedForMediaId = cleanMediaId
+                    lastAutoEndedAt = now
+                    onClientTrackEnded()
+                }
+            }
+
             val playStateChanged = prev == null ||
                 wasLoading ||
                 prev.mediaId != cleanMediaId ||

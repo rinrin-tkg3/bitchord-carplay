@@ -1086,13 +1086,17 @@ object CarPlayWebServer {
                     "togglePlay" -> {
                         controller?.onTogglePlay()
                     }
-                    "next" -> {
-                        val now = System.currentTimeMillis()
-                        if (now - lastSkipActionTime >= 300L) {
-                            lastSkipActionTime = now
-                            controller?.onNext()
-                        }
-                    }
+                    "next" -> {
+                        val now = System.currentTimeMillis()
+                        val elapsedRealtime = android.os.SystemClock.elapsedRealtime()
+                        val lastAutoEnd = CarPlayWebBridge.speaker?.lastAutoEndedAt ?: 0L
+                        // Suppress redundant skip if track naturally transitioned within the last 1200ms
+                        if (now - lastSkipActionTime >= 300L && (elapsedRealtime - lastAutoEnd > 1200L)) {
+                            lastSkipActionTime = now
+                            controller?.onNext()
+                        }
+                    }
+
                     "prev", "previous" -> {
                         val now = System.currentTimeMillis()
                         if (now - lastSkipActionTime >= 300L) {
